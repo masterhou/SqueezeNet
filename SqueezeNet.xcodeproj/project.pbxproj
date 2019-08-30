@@ -25,6 +25,9 @@
 /* Begin PBXFileReference section */
 		20DB3C1A2317B1B90082DD05 /* SqueezeNet */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = SqueezeNet; sourceTree = BUILT_PRODUCTS_DIR; };
 		20DB3C1D2317B1B90082DD05 /* main.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = main.c; sourceTree = "<group>"; };
+		20DB3C24231900DA0082DD05 /* stb_image_resize.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = stb_image_resize.h; sourceTree = "<group>"; };
+		20DB3C25231900DA0082DD05 /* stb_image_write.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = stb_image_write.h; sourceTree = "<group>"; };
+		20DB3C26231900DA0082DD05 /* stb_image.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = stb_image.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -57,6 +60,9 @@
 		20DB3C1C2317B1B90082DD05 /* SqueezeNet */ = {
 			isa = PBXGroup;
 			children = (
+				20DB3C24231900DA0082DD05 /* stb_image_resize.h */,
+				20DB3C25231900DA0082DD05 /* stb_image_write.h */,
+				20DB3C26231900DA0082DD05 /* stb_image.h */,
 				20DB3C1D2317B1B90082DD05 /* main.c */,
 			);
 			path = SqueezeNet;
