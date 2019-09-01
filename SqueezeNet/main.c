@@ -16,6 +16,13 @@
 //#include "stb_image_write.h"
 
 #define MIN_FLOAT       -1e6
+// layer type
+#define L_CONV  1
+#define L_RELU  2
+#define L_MAX   4
+#define L_AVG   8
+#define L_CONCAT 16
+#define L_FIRE  32
 
 // Image memery [W * H * C] need convert to Data formate
 // Data  [N * C * W * H]
@@ -45,30 +52,25 @@ typedef struct layer{
     layer* in;
     forword_func forword; // funcation
 } layer;
-// layer type
-#define L_CONV  1
-#define L_RELU  2
-#define L_MAX   4
-#define L_AVG   8
-#define L_CONCAT 16
-#define L_FIRE  32
 
 void conv_layer(layer *l, uint8_t *d);
 void max_layer(layer *l, uint8_t *d);
 void avg_layer(layer *l, uint8_t *d);
 void concat_layer(layer *l, uint8_t *d);
 
-
 #define LAY_MAX     0x10
 typedef struct network {
     layer layers[LAY_MAX];
     uint8_t llen;
     uint16_t classes;
-    uint8_t channel;
+    uint8_t input_c;
     uint16_t input_w;
     uint16_t input_h;
     /* data offset */
     uint32_t image;
+    // weight + [layer: in(image in 1st layer / last layer's out) + out(next layer's in)]
+    // weight lenght: [cout * cin * kernel^2]
+    // bias lenght: [cout]
     uint8_t data[1024*1024*256]; // in DRAM
 }network;
 
@@ -77,11 +79,11 @@ void build_layer(network* net, uint32_t type, uint8_t ci, uint8_t co, uint8_t k,
     if(net->llen==0) {
         l->w = net->input_w;
         l->h = net->input_h;
-        l->c = net->channel;
+        l->c = net->input_c;
         l->din = net->image;
         l->dout = net->image + l->w*l->h*l->c*sizeof(float);
         l->weight = 0;
-        l->bias = 0;
+        l->bias = l->co*l->k*l->k*l->c*sizeof(float);
     }
     else {
         l->in = l-in;
@@ -92,7 +94,8 @@ void build_layer(network* net, uint32_t type, uint8_t ci, uint8_t co, uint8_t k,
         
         l->din = l->in->dout;
         l->dout = l->din + l->w*l->h*l->c*sizeof(float);
-        l->weight = l->in->weight + l->in->k * l->in->k * l->c * l->w * l->h * sizeof(float);
+        l->weight = l->in->weight + l->in->bias + l->in->co;
+        l->bias = l->weight + l->co*l->k*l->k*l->c*sizeof(float);
     }
     l->k = k;
     l->s = s;
@@ -104,8 +107,9 @@ void build_layer(network* net, uint32_t type, uint8_t ci, uint8_t co, uint8_t k,
         l->forword = max_layer;
     else if((type&L_AVG) == L_AVG)
         l->forword = avg_layer;
-    else if((type&L_CONCAT) == L_CONCAT)
+    else if((type&L_CONCAT) == L_CONCAT) {
         l->forword = concat_layer;
+    }
     
     net->llen++;
 }
@@ -140,12 +144,11 @@ void conv_layer(layer *l, uint8_t *d) {
                     // convolution with kernel
                     for (kh=0; kh<l->k; kh++) {
                         for (kw=0; kw<l->k; kw++) {
-                            // val += input(l, din, w+kw, h+kh, c) * wei[co*c*l->k*l->k + l->k*kh + kw];
-                            val += input(l, din, w+kw, h+kh, c) * (*wei++); // weight as stream instead of index
+                            val += input(l, din, w+kw, h+kh, c) * wei[co*c*l->k*l->k + l->k*kh + kw];
                         }
                     }
                 }
-                val += *bias++;
+                val += bias[co];
                 // ReLU
                 if(relu && val<=0.f){
                     // index = co * (l->w/s) * (l->h/s) + (l->w/s)*(h/s) + w/s;
@@ -225,11 +228,11 @@ void load_image(network* net, const char* path){
     int w, h, c;
     unsigned char *img = stbi_load(path, &w, &h, &c, 0);
     float *dat = (float*)(net->data + net->image);
-    uint8_t *temp = net->data + net->image + net->input_w*net->input_h*net->channel*sizeof(float);
+    uint8_t *temp = net->data + net->image + net->input_w*net->input_h*net->input_c*sizeof(float);
     // resize
-    stbir_resize_uint8(img, w, h, 0, temp, net->input_w, net->input_h, 0, net->channel);
+    stbir_resize_uint8(img, w, h, 0, temp, net->input_w, net->input_h, 0, net->input_c);
     // convert to C * W * H, float
-    for (c=0; c<net->channel; c++) {
+    for (c=0; c<net->input_c; c++) {
         for (h=0; h<net->input_h; h++) {
             for (w=0; w<net->input_w; w++) {
                 *dat++ = (float)temp[net->input_w*h + w + c];
@@ -251,7 +254,7 @@ void build_fire(network* net, uint16_t inplanes, uint16_t squeeze_planes, uint16
     build_layer(net, L_CONV|L_RELU, squeeze_planes, expand3x3_planes, 3, 1, 1, 2);
     // concat: expand1x1 + expand3x3
     // *may use memery composition instead of concat layer: channel data + channel data
-    build_layer(net, L_CONCAT, 3, 64, 3, 2, 0, 1);
+    build_layer(net, L_CONCAT, 3, 64, 3, 2, 0, 2);
 }
 
 /* SqueezeNet v1.1 */
@@ -285,8 +288,8 @@ void build_SqueezeNet_v10(network* net){
 int main(int argc, const char * argv[]) {
     network net_v11;
     net_v11.llen = 0;
-    net_v11.channel = 3;
     net_v11.classes = 1000;
+    net_v11.input_c = 3;
     net_v11.input_w = 227;
     net_v11.input_h = 227;
     
