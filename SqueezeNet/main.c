@@ -79,12 +79,12 @@ typedef struct network {
 }network;
 
 void print_layer(layer *l) {
-    printf("%s, %3d, %3d, %4d, %4d, %d, %d, %d, %6d, %7d, %7d\n", "conv", l->w, l->h, l->c, l->co, l->k, l->s, l->pad, l->weight, l->din, l->dout);
+    printf("%s, %3d, %3d, %4d, %4d, %d, %d, %d, %6d, %7d, %7d\n", "conv", l->w, l->h, l->co, l->c, l->k, l->s, l->pad, l->weight, l->din, l->dout);
 }
 
 void print_wetwork(network* net) {
     int i = 0;
-    printf(" i, type, wid, hei,  cin, cout, k, s, p, weight, data in, data out\n");
+    printf(" i, type, wid, hei, cout,  cin, k, s, p, weight, data in, data out\n");
     for (i=0; i<net->llen; i++) {
         printf("%2d: ", i);
         print_layer(net->layers + i);
@@ -180,6 +180,7 @@ void conv_layer(network* net, layer *l) {
         }
     }
     net->dw += l->weight + l->co; // weight point ++
+    printf("%ld ", net->dw-net->data);
 }
 
 void cat_layer(network* net, layer *l) {
@@ -215,7 +216,7 @@ void avg_layer(network* net, layer *l) {
     for (c=0; c<l->c; c++) {
         for (h=0; h<l->h; h+=l->s) {
             for (w=0; w<l->w; w+=l->s) { // stride
-                float val = MIN_FLOAT;
+                float val = 0;
                 for (kh=0; kh<l->k; kh++) {
                     for (kw=0; kw<l->k; kw++) {
                         val += din[c*(l->w*l->h) + l->w*(h+kh) + (w+kw)];
@@ -225,13 +226,20 @@ void avg_layer(network* net, layer *l) {
             }
         }
     }
+    out =(float*)(net->data + l->dout);
+    for (int i = 0; i < 1000; ++i)
+    {
+        printf("%f,", out[i]);
+    }
 }
 
 void network_forword(network* net){
     int i;
     net->dw = net->data;
     for (i=0; i<net->llen; i++) {
+        printf("%d: ", i);
         net->layers[i].forword(net, net->layers+i);
+        printf("\n");
     }
 }
 
@@ -289,6 +297,7 @@ void build_cat(network* net, uint32_t type, uint16_t co, layer* l1, layer* l2){
     l->co = co;
     l->type = type;
     l->dout = l1->dout;
+    l->forword = cat_layer;
     net->llen++;
 }
 
@@ -313,11 +322,11 @@ void build_SqueezeNet_v11(network* net){
     
     build_fire(net,  64, 16, 64, 64);
     build_fire(net, 128, 16, 64, 64);
-    build_layer(net, L_MAX, 128, 64, 3, 2, 0, 1);
+    build_layer(net, L_MAX, 128, 128, 3, 2, 0, 1);
     
     build_fire(net, 128, 32, 128, 128);
     build_fire(net, 256, 32, 128, 128);
-    build_layer(net, L_MAX, 256, 64, 3, 2, 0, 1);
+    build_layer(net, L_MAX, 256, 256, 3, 2, 0, 1);
     
     build_fire(net, 256, 48, 192, 192);
     build_fire(net, 384, 48, 192, 192);
@@ -326,7 +335,7 @@ void build_SqueezeNet_v11(network* net){
 
     // Final convolution
     build_layer(net, L_CONV|L_RELU, 512, net->classes, 1, 1, 0, 1);
-    build_layer(net, L_AVG, 1, 16, 1, 1, 0, 1);
+    build_layer(net, L_AVG, 16, 1, 14, 1, 0, 1);
 }
 
 /* SqueezeNet v1.0 */
