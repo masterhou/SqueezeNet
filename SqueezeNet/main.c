@@ -16,6 +16,7 @@
 #include "stb_image_write.h"
 
 #define MIN_FLOAT       -1e6
+
 // layer type
 #define L_CONV  1
 #define L_RELU  2
@@ -30,7 +31,8 @@ char label[1000][160];
 // Data  [N * C * W * H]
 
 typedef struct layer layer;
-typedef void(*forword_func)(layer *l, uint8_t *d);
+typedef struct network network;
+typedef void(*forword_func)(network* net, layer *l);
 
 typedef struct layer{
     /* input */
@@ -48,17 +50,16 @@ typedef struct layer{
     /* data offset */
     uint32_t din;
     uint32_t dout;
-    /* weight offset */
+    /* weight length */
     uint32_t weight;
-    uint32_t bias;
     layer* in;
     forword_func forword; // funcation
 } layer;
 
-void conv_layer(layer *l, uint8_t *d);
-void max_layer(layer *l, uint8_t *d);
-void avg_layer(layer *l, uint8_t *d);
-void concat_layer(layer *l, uint8_t *d);
+void conv_layer(network* net, layer *l);
+void max_layer (network* net, layer *l);
+void avg_layer (network* net, layer *l);
+void cat_layer(network* net, layer *l);
 
 #define LAY_MAX     0x40
 typedef struct network {
@@ -69,24 +70,28 @@ typedef struct network {
     uint16_t input_w;
     uint16_t input_h;
     /* data offset */
-    uint32_t image;
+    uint32_t weight;
     // weight + [layer: in(image in 1st layer / last layer's out) + out(next layer's in)]
     // weight lenght: [cout * cin * kernel^2]
     // bias lenght: [cout]
-    uint8_t data[1024*1024*32]; // in DRAM
+    float data[1024*1024*40]; // in DRAM
+    float *dw;
 }network;
 
 void print_layer(layer *l) {
-    printf("%s, %3d, %3d, %3d, %3d, %d, %d, %d, %9d, %9d, %9d ,%9d\n", "conv", l->w, l->h, l->c, l->co, l->k, l->s, l->pad, l->weight, l->bias, l->din, l->dout);
+    printf("%s, %3d, %3d, %4d, %4d, %d, %d, %d, %6d, %7d, %7d\n", "conv", l->w, l->h, l->c, l->co, l->k, l->s, l->pad, l->weight, l->din, l->dout);
 }
 
 void print_wetwork(network* net) {
     int i = 0;
+    printf(" i, type, wid, hei,  cin, cout, k, s, p, weight, data in, data out\n");
     for (i=0; i<net->llen; i++) {
-        printf("\n%2d:", i);
+        printf("%2d: ", i);
         print_layer(net->layers + i);
     }
 }
+
+#define DL(l) (l->w * l->h * l->c)
 
 layer* build_layer(network* net, uint32_t type, uint16_t ci, uint16_t co, uint8_t k, uint8_t s, uint8_t pad, uint8_t in){
     layer *l = net->layers + net->llen;
@@ -95,42 +100,40 @@ layer* build_layer(network* net, uint32_t type, uint16_t ci, uint16_t co, uint8_
         l->w = net->input_w;
         l->h = net->input_h;
         l->c = net->input_c;
-        l->din = net->image;
-        l->dout = net->image + l->w*l->h*l->c*sizeof(float); // image + image_size
-        l->weight = 0;
-        l->bias = l->co*l->k*l->k*l->c*sizeof(float);
     }
     else {
         l->in = l-in;
-        l->c = ci;
-        l->co = co;
+        l->c = l->in->co;
         l->w = l->in->w / l->in->s;
         l->h = l->in->h / l->in->s;
-        
         l->din = l->in->dout;
-        l->dout = l->din + l->w*l->h*l->c*sizeof(float); // din + din_size
-        l->weight = l->in->bias + l->in->co;
-        l->bias = l->weight + l->co*l->k*l->k*l->c*sizeof(float);
     }
+    l->co = co;
     l->k = k;
     l->s = s;
     l->pad = pad;
+
+    l->dout = l->din + DL(l);
     
-    if((type&L_CONV) == L_CONV)
+    if((type&L_CONV) == L_CONV){
         l->forword = conv_layer;
-    else if((type&L_MAX) == L_MAX)
-        l->forword = max_layer;
-    else if((type&L_AVG) == L_AVG)
-        l->forword = avg_layer;
-    else if((type&L_CONCAT) == L_CONCAT) {
-        l->forword = concat_layer;
+        l->weight = l->co * l->k * l->k * l->c;
     }
+    else if((type&L_MAX) == L_MAX){
+        l->forword = max_layer;
+    }
+    else if((type&L_AVG) == L_AVG){
+        l->forword = avg_layer;
+    }
+    // else if((type&L_CONCAT) == L_CONCAT) {
+    //     l->forword = cat_layer;
+    // }
     
     net->llen++;
     return l;
 }
 
-// image pixel channle
+// image pixel channle, todo PAD
 float input(layer *l, float *d, uint16_t w, uint16_t h, uint8_t c){
     // ignore pad
     w -= l->k/2;
@@ -145,13 +148,13 @@ float input(layer *l, float *d, uint16_t w, uint16_t h, uint8_t c){
 }
 
 // 2d image convolution
-void conv_layer(layer *l, uint8_t *d) {
+void conv_layer(network* net, layer *l) {
     uint8_t relu = ((l->type & L_RELU) == L_RELU);
     uint16_t c,co,w,h,kw,kh;
-    float *din=(float*)(d+l->din);
-    float *out=(float*)(d+l->dout);
-    float *wei=(float*)(d+l->weight);
-    float *bias=(float*)(d+l->bias);
+    float *din =(float*)(net->data + l->din);
+    float *out =(float*)(net->data + l->dout);
+    float *wei =(float*)(net->dw);
+    float *bias=(float*)(net->dw+l->weight);
     for (co=0; co<l->co; co++) {
         for (h=0; h<l->h; h+=l->s) {
             for (w=0; w<l->w; w+=l->s) { // stride
@@ -176,17 +179,18 @@ void conv_layer(layer *l, uint8_t *d) {
             }
         }
     }
+    net->dw += l->weight + l->co; // weight point ++
 }
 
-void concat_layer(layer *l, uint8_t *d) {
+void cat_layer(network* net, layer *l) {
     // only channel + channel
     // change next layer din offset
 }
 
-void max_layer(layer *l, uint8_t *d) {
+void max_layer(network* net, layer *l) {
     uint16_t c,w,h,kw,kh;
-    float *din=(float*)(d+l->din);
-    float *out=(float*)(d+l->dout);
+    float *din =(float*)(net->data + l->din);
+    float *out =(float*)(net->data + l->dout);
     for (c=0; c<l->c; c++) {
         for (h=0; h<l->h; h+=l->s) {
             for (w=0; w<l->w; w+=l->s) { // stride
@@ -204,10 +208,10 @@ void max_layer(layer *l, uint8_t *d) {
     }
 }
 
-void avg_layer(layer *l, uint8_t *d) {
+void avg_layer(network* net, layer *l) {
     uint16_t c,w,h,kw,kh;
-    float *din=(float*)(d+l->din);
-    float *out=(float*)(d+l->dout);
+    float *din =(float*)(net->data + l->din);
+    float *out =(float*)(net->data + l->dout);
     for (c=0; c<l->c; c++) {
         for (h=0; h<l->h; h+=l->s) {
             for (w=0; w<l->w; w+=l->s) { // stride
@@ -225,8 +229,9 @@ void avg_layer(layer *l, uint8_t *d) {
 
 void network_forword(network* net){
     int i;
+    net->dw = net->data;
     for (i=0; i<net->llen; i++) {
-        net->layers[i].forword(&net->layers[i], net->data);
+        net->layers[i].forword(net, net->layers+i);
     }
 }
 
@@ -238,16 +243,17 @@ void load_weight(network* net, const char* path){
     fseek(f, 0, SEEK_SET);
     fread(net->data, 1, weight, f);
     fclose(f);
-    net->image = (uint32_t)weight;
+    net->weight = weight>>2;
+    // printf("%d,%d\n", net->weight, weight);
 }
 
 void load_image(network* net, const char* path){
     int w, h, c;
     unsigned char *img = stbi_load(path, &w, &h, &c, 0);
-    float *dat = (float*)(net->data + net->image);
-    uint8_t *temp = net->data + net->image + net->input_w*net->input_h*net->input_c*sizeof(float);
+    float *dat = net->data + net->weight;
+    float *temp = dat + net->input_w*net->input_h*net->input_c;
     // resize
-    stbir_resize_uint8(img, w, h, 0, temp, net->input_w, net->input_h, 0, net->input_c);
+    stbir_resize_uint8(img, w, h, 0, (uint8_t*)temp, net->input_w, net->input_h, 0, net->input_c);
 //    stbi_write_bmp("cat_227.bmp", net->input_w, net->input_h, 3, temp); // test
     // convert to C * W * H, float
     for (c=0; c<net->input_c; c++) {
@@ -280,13 +286,9 @@ void build_cat(network* net, uint32_t type, uint16_t co, layer* l1, layer* l2){
     l->w = l1->w;
     l->h = l1->h;
     l->s = 1;
-    l->c = 0;
     l->co = co;
     l->type = type;
-    l->din = l1->dout;
     l->dout = l1->dout;
-    l->weight = l2->weight;
-    l->bias = l2->bias - l->co;
     net->llen++;
 }
 
@@ -297,10 +299,8 @@ void build_fire(network* net, uint16_t inplanes, uint16_t squeeze_planes, uint16
     layer* l1 = build_layer(net, L_CONV|L_RELU, squeeze_planes, expand1x1_planes, 1, 1, 0, 1);
     // squeeze -> expand3x3
     layer* l3 = build_layer(net, L_CONV|L_RELU, squeeze_planes, expand3x3_planes, 3, 1, 1, 2);
+    l3->dout = l1->dout + DL(l1);
     // concat: expand1x1 + expand3x3
-    l3->dout = l1->dout + l1->w*l1->h*l1->c*sizeof(float);
-    l3->weight = l1->bias + l1->co;
-    l3->bias = l3->weight + l3->co*l3->k*l3->k*l3->c*sizeof(float);
     // *may use memery composition instead of concat layer: channel data + channel data
     build_cat(net, L_CONCAT, expand1x1_planes+expand3x3_planes, l1, l3);
 }
