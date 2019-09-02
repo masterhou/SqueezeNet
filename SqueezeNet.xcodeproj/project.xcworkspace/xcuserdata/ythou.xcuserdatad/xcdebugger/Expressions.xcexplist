@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<VariablesViewState
+   version = "1.0">
+   <ContextStates>
+      <ContextState
+         contextName = "load_weight:main.c">
+         <PersistentStrings>
+            <PersistentString
+               value = "((float*)(net-&gt;data))[0]">
+            </PersistentString>
+         </PersistentStrings>
+      </ContextState>
+      <ContextState
+         contextName = "main:main.c">
+      </ContextState>
+      <ContextState
+         contextName = "build_cat:main.c">
+      </ContextState>
+      <ContextState
+         contextName = "load_label:main.c">
+      </ContextState>
+      <ContextState
+         contextName = "build_layer:main.c">
+         <PersistentStrings>
+            <PersistentString
+               value = "l-&gt;in">
+            </PersistentString>
+         </PersistentStrings>
+      </ContextState>
+      <ContextState
+         contextName = "build_SqueezeNet_v11:main.c">
+      </ContextState>
+   </ContextStates>
+</VariablesViewState>
