@@ -149,13 +149,11 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
 
 // image pixel channle, todo PAD
 float input(layer *l, float *d, uint16_t w, uint16_t h, uint8_t c){
-    // ignore pad
+    w -= l->pad;
+    h -= l->pad;
 
-    if(w > l->w)    w = l->w - 1;
-    else if(w < 0)  w = 0;
-    
-    if(h > l->h)    h= l->h - 1;
-    else if(h < 0)  h = 0;
+    if(w > l->w || w < 0)    return 0.0;
+    if(h > l->h || h < 0)    return 0.0;
     
     return d[c*(l->w*l->h) + l->w*h + w];
 }
@@ -189,11 +187,11 @@ void conv_layer(network* net, layer *l) {
                 if(relu && val<=0.f){
                     // index = co * (l->w/s) * (l->h/s) + (l->w/s)*(h/s) + w/s;
                     *out++ = 0.f; // out as stream instead of index
-                    printf("%f, ", 0.0);
+                    // printf("%f, ", 0.0);
                 }
                 else {
                     *out++ = val;
-                    printf("%f, ", val);
+                    // printf("%f, ", val);
                 }
             }
         }
@@ -266,11 +264,11 @@ void gavg_layer(network* net, layer *l) {
         }
         *(out++) = sum/size;
     }
-    // out =(float*)(net->data + l->dout);
-    // for (int i = 0; i < 1000; ++i)
-    // {
-    //     printf("%f,", out[i]);
-    // }
+    out =(float*)(net->data + l->dout);
+    for (int i = 0; i < 1000; ++i)
+    {
+        printf("%f,", out[i]);
+    }
 }
 
 void avg_layer(network* net, layer *l) {
@@ -300,8 +298,8 @@ void avg_layer(network* net, layer *l) {
 void network_forword(network* net){
     int i;
     net->dw = net->data;
-//    for (i=0; i<net->llen; i++) {
-    for (i=0; i<1; i++) {
+   for (i=0; i<net->llen; i++) {
+    // for (i=0; i<1; i++) {
         printf("%d: ", i);
         net->layers[i].forword(net, net->layers+i);
         printf("\n");
@@ -435,16 +433,16 @@ void load_image(network* net, const char* path){
             }
         }
     }
-    dat = net->data + net->weight;
-    for (c=0; c<net->input_c; c++) {
-        for (h=0; h<net->input_h; h++) {
-            for (w=0; w<net->input_w; w++) {
-                   printf("%f, ", *dat++);
-                }
-            }
-    }
-    // free(tem);
-    // free(temp);
+    // dat = net->data + net->weight;
+    // for (c=0; c<net->input_c; c++) {
+    //     for (h=0; h<net->input_h; h++) {
+    //         for (w=0; w<net->input_w; w++) {
+    //                printf("%f, ", *dat++);
+    //             }
+    //         }
+    // }
+    free(tem);
+    free(temp);
 }
 
 void load_img_npy(network* net, const char* path){
@@ -485,9 +483,9 @@ int main(int argc, const char * argv[]) {
     load_label(&net_v11, argv[2]);
     load_image(&net_v11, argv[3]); // raw image, [c * w * h]
     // load_img_npy(&net_v11, argv[3]);
-    // build_SqueezeNet_v11(&net_v11);
-   // print_wetwork(&net_v11);
-    // network_forword(&net_v11);
+    build_SqueezeNet_v11(&net_v11);
+   print_wetwork(&net_v11);
+    network_forword(&net_v11);
     
     printf("\n");
     return 0;
