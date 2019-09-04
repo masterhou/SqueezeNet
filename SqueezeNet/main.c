@@ -157,8 +157,6 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
         l->h = l->in->ho;
         l->din = l->in->dout;
     }
-    l->ho = l->h/s; //(l->h + 2 * pad - k) / s + 1;
-    l->wo = l->w/s; //(l->w + 2 * pad - k) / s + 1;
     l->co = co;
     l->k = k;
     l->s = s;
@@ -167,15 +165,21 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
     l->dout = l->din + (l->w * l->h * l->c);
     
     if((type&L_CONV) == L_CONV){
+        l->ho = (l->h + 2 * pad - k) / s + 1;
+        l->wo = (l->w + 2 * pad - k) / s + 1;
         l->forword = conv_layer;
         l->weight = l->co * l->c * l->k * l->k;
         sprintf(l->name, "conv%d", net->llen);
     }
     else if((type&L_MAX) == L_MAX){
+        l->ho = ceil((l->h + 2.0 * pad - k) / s) + 1;
+        l->wo = ceil((l->w + 2.0 * pad - k) / s) + 1;
         l->forword = max_layer;
         sprintf(l->name, "max%d", net->llen);
     }
     else if((type&L_AVG) == L_AVG){
+        l->ho = 1;
+        l->wo = 1;
         l->forword = gavg_layer;
         sprintf(l->name, "gavg%d", net->llen);
     }
@@ -200,7 +204,6 @@ float input(layer *l, float *d, uint16_t w, uint16_t h, uint16_t c){
     return d[c*(l->w*l->h) + l->w*h + w];
 }
 
-int log_ = 0;
 // 2d image convolution
 void conv_layer(network* net, layer *l) {
     uint8_t relu = ((l->type & L_RELU) == L_RELU);
@@ -445,14 +448,14 @@ void load_image_(network* net, const char* path){
             }
         }
     }
-    dat = net->data + net->weight;
-    for (c=0; c<net->input_c; c++) {
-        for (h=0; h<net->input_h; h++) {
-            for (w=0; w<net->input_w; w++) {
-                   printf("%f, ", *dat++);
-                }
-            }
-    }
+    // dat = net->data + net->weight;
+    // for (c=0; c<net->input_c; c++) {
+    //     for (h=0; h<net->input_h; h++) {
+    //         for (w=0; w<net->input_w; w++) {
+    //                printf("%f, ", *dat++);
+    //             }
+    //         }
+    // }
 }
 
 void load_image(network* net, const char* path){
@@ -529,8 +532,8 @@ int main(int argc, const char * argv[]) {
 
     load_weight(&net_v11, argv[1]);
     load_label(&net_v11, argv[2]);
-//    load_image(&net_v11, argv[3]); // raw image, [c * w * h]
-    load_img_npy(&net_v11, argv[3]);
+    load_image_(&net_v11, argv[3]); // raw image, [c * w * h]
+    // load_img_npy(&net_v11, argv[3]);
     build_SqueezeNet_v11(&net_v11);
     print_wetwork(&net_v11);
     network_forword(&net_v11);
