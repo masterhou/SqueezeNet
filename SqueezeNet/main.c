@@ -147,13 +147,13 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
     return l;
 }
 
-// image pixel channle, todo PAD
+// get input data
 float input(layer *l, float *d, uint16_t w, uint16_t h, uint8_t c){
+    // padding, fill 0.0
     w -= l->pad;
     h -= l->pad;
-
-    if(w > l->w || w < 0)    return 0.0;
-    if(h > l->h || h < 0)    return 0.0;
+    if(w >= l->w || w < 0)    return 0.0;
+    if(h >= l->h || h < 0)    return 0.0;
     
     return d[c*(l->w*l->h) + l->w*h + w];
 }
