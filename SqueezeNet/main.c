@@ -80,26 +80,66 @@ typedef struct network {
     // weight + [layer: in(image in 1st layer / last layer's out) + out(next layer's in)]
     // weight lenght: [cout * cin * kernel^2]
     // bias lenght: [cout]
-    float data[1024*1024*20]; // in DRAM
+    float data[1024*1024*32]; // in DRAM
     float *dw;
 }network;
 
 void print_layer(layer *l) {
-    printf("%5s, %3d, %3d, %4d, %4d, %3d, %3d, %2d, %2d, %d, %6d, %7d, %7d, %7d\n", l->name,
+    printf("%6s, %3d, %3d, %4d, %4d, %3d, %3d, %2d, %2d, %d, %6d, %7d, %7d, %7d\n", l->name,
            l->w, l->h, l->c, l->co, l->wo, l->ho, l->k, l->s, l->pad,
            l->weight, l->din, l->dout, l->co * (l->wo) * (l->ho));
 }
 
 void print_wetwork(network* net) {
     int i = 0;
-    printf(" i,  type, win, hin,  cin, cout,wout,hout,  k,  s, p, weight, data in, dataout, data len\n");
+    printf(" i,   type, win, hin,  cin, cout,wout,hout,  k,  s, p, weight, data in, dataout, data len\n");
     for (i=0; i<net->llen; i++) {
         printf("%2d: ", i);
         print_layer(net->layers + i);
     }
 }
 
-#define DL(l) (l->w * l->h * l->c)
+float * test_load(char* npy, long s) {
+    FILE   *f;
+    f = fopen(npy, "rb");
+    fseek(f, 128, SEEK_SET);
+    float *dat = malloc(sizeof(float)*s);
+    long ll = fread(dat, sizeof(float), s, f);
+    assert(ll==s);
+    fclose(f);
+    return dat;
+}
+
+void test_data(char* npy, network* net, layer *l) {
+    long s = l->co*(l->ho)*(l->wo);
+    float *dat = test_load(npy, s), *dd = dat;
+    float *out =(float*)(net->data + l->dout);
+    int diff = 0;
+    for (int i=0; i<s; i++) {
+        if(fabsf(((*out) - (*dd))/(*out))>0.000001)
+        {
+            printf("%d: %f, %f\n", i, *out++, *dd++);
+            diff = 1;
+        }
+    }
+    free(dat);
+    printf("test out %s(%ld) %s\n", l->name, s, diff? "failed" : "ok");
+}
+void test_weight(char* npy, network* net, layer *l) {
+    long s = l->co*l->c*(l->k)*(l->k);
+    float *dat = test_load(npy, s), *dd = dat;
+    float *wei =(float*)(net->dw);
+    int diff = 0;
+    for (int i=0; i<s; i++) {
+        if(fabsf(((*wei) - (*dd))/(*wei))>0.000001)
+        {
+            printf("%d: %f, %f\n", i, *wei++, *dd++);
+            diff = 1;
+        }
+    }
+    free(dat);
+    printf("test weight %s(%ld) %s\n\n", l->name, s, diff? "failed" : "ok");
+}
 
 layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t s, uint8_t pad, uint8_t in){
     layer *l = net->layers + net->llen;
@@ -117,8 +157,8 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
         l->h = l->in->ho;
         l->din = l->in->dout;
     }
-    l->ho = (l->h + 2 * pad - k) / s + 1;
-    l->wo = (l->w + 2 * pad - k) / s + 1;
+    l->ho = l->h/s; //(l->h + 2 * pad - k) / s + 1;
+    l->wo = l->w/s; //(l->w + 2 * pad - k) / s + 1;
     l->co = co;
     l->k = k;
     l->s = s;
@@ -129,15 +169,15 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
     if((type&L_CONV) == L_CONV){
         l->forword = conv_layer;
         l->weight = l->co * l->c * l->k * l->k;
-        strcpy(l->name, "conv");
+        sprintf(l->name, "conv%d", net->llen);
     }
     else if((type&L_MAX) == L_MAX){
         l->forword = max_layer;
-        strcpy(l->name, "max");
+        sprintf(l->name, "max%d", net->llen);
     }
     else if((type&L_AVG) == L_AVG){
         l->forword = gavg_layer;
-        strcpy(l->name, "gavg");
+        sprintf(l->name, "gavg%d", net->llen);
     }
     // else if((type&L_CONCAT) == L_CONCAT) {
     //     l->forword = cat_layer;
@@ -148,16 +188,19 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
 }
 
 // get input data
-float input(layer *l, float *d, uint16_t w, uint16_t h, uint8_t c){
+float input(layer *l, float *d, uint16_t w, uint16_t h, uint16_t c){
     // padding, fill 0.0
     w -= l->pad;
     h -= l->pad;
-    if(w >= l->w || w < 0)    return 0.0;
-    if(h >= l->h || h < 0)    return 0.0;
+    if(w >= l->w || w < 0)
+        return 0.0;
+    if(h >= l->h || h < 0)
+        return 0.0;
     
     return d[c*(l->w*l->h) + l->w*h + w];
 }
 
+int log_ = 0;
 // 2d image convolution
 void conv_layer(network* net, layer *l) {
     uint8_t relu = ((l->type & L_RELU) == L_RELU);
@@ -176,42 +219,26 @@ void conv_layer(network* net, layer *l) {
                         for (kw=0; kw<l->k; kw++) {
                             float weight = wei[co*l->c*tk + c*tk + l->k*kh + kw];
                             float p = input(l, din, l->s*w+kw, l->s*h+kh, c);
-                           // printf("%f, %f\n", p, weight);
                             val +=  p * weight;
                         }
                     }
                     // use Accelerate
-//                    cblas_sgemm(
+                    // cblas_sgemm(
                 }
                 // ReLU
                 if(relu && val<=0.f){
                     // index = co * (l->w/s) * (l->h/s) + (l->w/s)*(h/s) + w/s;
                     *out++ = 0.f; // out as stream instead of index
-                    // printf("%f, ", 0.0);
                 }
                 else {
                     *out++ = val;
-                    // printf("%f, ", val);
                 }
             }
         }
     }
-    // test ok
-//    FILE   *f;
-//    f = fopen("conv1.npy", "rb");
-//    fseek(f, 128, SEEK_SET);
-//    long s = l->co*(l->h/l->s)*(l->w/l->s);
-//    float *dat = malloc(sizeof(float)*s);
-//    long ll = fread(dat, sizeof(float), s, f);
-//    fclose(f);
-//    float *dd = dat;
-//    out =(float*)(net->data + l->dout);
-//    for (int i=0; i<s; i++) {
-//        printf("%f, %f\n", *out++, *dd++);
-//    }
-    
+//    if(strcmp("fire27", l->name)==0) // ok
+//        test_weight("conv17.npy", net, l);
     net->dw += l->weight + l->co; // weight point ++
-//    printf("%ld ", net->dw-net->data);
 }
 
 void cat_layer(network* net, layer *l) {
@@ -238,19 +265,6 @@ void max_layer(network* net, layer *l) {
             }
         }
     }
-    // test ok
-//    FILE   *f;
-//    f = fopen("pool1.npy", "rb");
-//    fseek(f, 128, SEEK_SET);
-//    long s = l->co*(l->ho)*(l->wo);
-//    float *dat = malloc(sizeof(float)*s);
-//    long ll = fread(dat, sizeof(float), s, f);
-//    fclose(f);
-//    float *dd = dat;
-//    out =(float*)(net->data + l->dout);
-//    for (int i=0; i<s; i++) {
-//        printf("%f, %f\n", *out++, *dd++);
-//    }
 }
 
 void gavg_layer(network* net, layer *l) {
@@ -264,11 +278,7 @@ void gavg_layer(network* net, layer *l) {
         }
         *(out++) = sum/size;
     }
-    out =(float*)(net->data + l->dout);
-    for (int i = 0; i < 1000; ++i)
-    {
-        printf("%f,", out[i]);
-    }
+//    test_data("pool10.npy", net, l);
 }
 
 void avg_layer(network* net, layer *l) {
@@ -288,25 +298,60 @@ void avg_layer(network* net, layer *l) {
             }
         }
     }
-//    out =(float*)(net->data + l->dout);
-//    for (int i = 0; i < 1000; ++i)
-//    {
-//        printf("%f,", out[i]);
-//    }
+}
+
+void soft_max(network* net, layer *l) {
+    float *out =(float*)(net->data + l->dout);
+    int index=0;
+    float val=0;
+    for (int i=0; i<net->classes; i++) {
+        if(*out>val) {
+            val = *out;
+            index = i;
+        }
+        out++;
+    }
+    printf("soft_max result [%d]: %f, %s\n", index, val, label[index]);
 }
 
 void network_forword(network* net){
     int i;
     net->dw = net->data;
-   for (i=0; i<net->llen; i++) {
-    // for (i=0; i<1; i++) {
-        printf("%d: ", i);
+    for (i=0; i<net->llen; i++) {
+        printf("%d: %s", i, net->layers[i].name);
         net->layers[i].forword(net, net->layers+i);
         printf("\n");
+//        if(i==10){ // ok
+//            test_data("pool3.npy", net, net->layers+i);
+//            break;
+//        }
+//        if(i==19){  // ok
+//            test_data("pool5.npy", net, net->layers+i);
+//            break;
+//        }
+//        if(i==23){  // fcat23 / fire6/concat ok
+//            test_data("fire6_concat.npy", net, net->layers+i);
+//            break;
+//        }
+//        if(i==24){  // fire27 ok
+//            test_data("fire7_squeeze1x1.npy", net, net->layers+i);
+//            break;
+//        }
+//        if(i==25){  // ok
+//            test_data("fire7_expand1x1.npy", net, net->layers+i);
+//            break;
+//        }
+//        if(i==26){  // ok
+//            test_data("fire7_expand3x3.npy", net, net->layers+i);
+//            break;
+//        }
+
     }
+    soft_max(net, net->layers + net->llen-1);
+    return;
 }
 
-void build_cat(network* net, uint32_t type, layer* l1, layer* l2){
+layer* build_cat(network* net, uint32_t type, layer* l1, layer* l2){
     layer *l = net->layers + net->llen;
     l->c = l1->c;
     l->w = l1->w;
@@ -319,24 +364,27 @@ void build_cat(network* net, uint32_t type, layer* l1, layer* l2){
     l->din = l1->din;
     l->dout = l1->dout;
     l->forword = cat_layer;
-    strcpy(l->name, "fcat");
     net->llen++;
+    return l;
 }
 
 void build_fire(network* net, uint16_t inplanes, uint16_t squeeze_planes, uint16_t expand1x1_planes, uint16_t expand3x3_planes){
     // squeeze
+    static int i=2;
     layer* l = build_layer(net, L_CONV|L_RELU, squeeze_planes, 1, 1, 0, 1);
+    sprintf(l ->name, "f%d/s1", i);
     // squeeze -> expand1x1
     layer* l1 = build_layer(net, L_CONV|L_RELU, expand1x1_planes, 1, 1, 0, 1);
+    sprintf(l1->name, "f%d/e1", i);
     // squeeze -> expand3x3
     layer* l3 = build_layer(net, L_CONV|L_RELU, expand3x3_planes, 3, 1, 1, 2);
-    l3->dout = l1->dout + DL(l1);
-    strcpy(l ->name, "fire");
-    strcpy(l1->name, "f1x1");
-    strcpy(l3->name, "f3x3");
+    l3->dout = l1->dout + l1->co * (l1->wo) * (l1->ho);
+    sprintf(l3->name, "f%d/e3", i);
     // concat: expand1x1 + expand3x3
     // *may use memery composition instead of concat layer: channel data + channel data
-    build_cat(net, L_CONCAT, l1, l3);
+    l = build_cat(net, L_CONCAT, l1, l3);
+    sprintf(l->name, "f%d/cat", i);
+    i++;
 }
 
 /* SqueezeNet v1.1 */
@@ -375,14 +423,13 @@ void load_weight(network* net, const char* path){
     fseek(f, 0, SEEK_SET);
     fread(net->data, 1, weight, f);
     fclose(f);
-    net->weight = weight>>2;
+    net->weight = (int32_t)weight>>2;
     // printf("%d,%d\n", net->weight, weight);
 }
 
 void load_image_(network* net, const char* path){
     int w, h, c;
     uint8_t *img = stbi_load(path, &w, &h, &c, 0);
-    uint8_t *img_ = img;
     float *dat = net->data + net->weight;
     uint8_t temp[w*h*c];
     // resize
@@ -452,6 +499,7 @@ void load_img_npy(network* net, const char* path){
     fseek(f, 128, SEEK_SET);
     long s = net->input_c * net->input_w * net->input_h;
     long l = fread(dat, sizeof(float), s, f);
+    assert(l==s);
     fclose(f);
 }
 
@@ -481,10 +529,10 @@ int main(int argc, const char * argv[]) {
 
     load_weight(&net_v11, argv[1]);
     load_label(&net_v11, argv[2]);
-    load_image(&net_v11, argv[3]); // raw image, [c * w * h]
-    // load_img_npy(&net_v11, argv[3]);
+//    load_image(&net_v11, argv[3]); // raw image, [c * w * h]
+    load_img_npy(&net_v11, argv[3]);
     build_SqueezeNet_v11(&net_v11);
-   print_wetwork(&net_v11);
+    print_wetwork(&net_v11);
     network_forword(&net_v11);
     
     printf("\n");
