@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include <float.h>
 
-#include <Accelerate/Accelerate.h>
+//#include <Accelerate/Accelerate.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
