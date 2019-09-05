@@ -18,8 +18,6 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
-#define MIN_FLOAT       -1e6
-
 // layer type
 #define L_CONV  1
 #define L_RELU  2
@@ -27,6 +25,7 @@
 #define L_AVG   8
 #define L_CONCAT 16
 #define L_FIRE  32
+#define L_SOFT  64
 
 char label[1000][150];
 
@@ -66,6 +65,7 @@ void conv_layer(network* net, layer *l);
 void max_layer (network* net, layer *l);
 void gavg_layer (network* net, layer *l);
 void cat_layer(network* net, layer *l);
+void softmax_layer(network* net, layer *l);
 
 #define LAY_MAX     0x40
 typedef struct network {
@@ -80,7 +80,7 @@ typedef struct network {
     // weight + [layer: in(image in 1st layer / last layer's out) + out(next layer's in)]
     // weight lenght: [cout * cin * kernel^2]
     // bias lenght: [cout]
-    float data[1024*1024*32]; // in DRAM
+    float data[1024*1024*5]; // in DRAM
     float *dw;
 }network;
 
@@ -167,8 +167,8 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
     if((type&L_CONV) == L_CONV){
         l->ho = (l->h + 2 * pad - k) / s + 1;
         l->wo = (l->w + 2 * pad - k) / s + 1;
-        l->forword = conv_layer;
         l->weight = l->co * l->c * l->k * l->k;
+        l->forword = conv_layer;
         sprintf(l->name, "conv%d", net->llen);
     }
     else if((type&L_MAX) == L_MAX){
@@ -183,9 +183,12 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
         l->forword = gavg_layer;
         sprintf(l->name, "gavg%d", net->llen);
     }
-    // else if((type&L_CONCAT) == L_CONCAT) {
-    //     l->forword = cat_layer;
-    // }
+     else if((type&L_SOFT) == L_SOFT) {
+         l->ho = 1;
+         l->wo = 1;
+         l->forword = softmax_layer;
+         sprintf(l->name, "soft%d", net->llen);
+     }
     
     net->llen++;
     return l;
@@ -194,6 +197,7 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
 // get input data
 float input(layer *l, float *d, uint16_t w, uint16_t h, uint16_t c){
     // padding, fill 0.0
+    
     w -= l->pad;
     h -= l->pad;
     if(w >= l->w || w < 0)
@@ -264,7 +268,7 @@ void max_layer(network* net, layer *l) {
                             val = t;
                     }
                 }
-                *(out++) = val;
+                *out++ = val;
             }
         }
     }
@@ -279,7 +283,8 @@ void gavg_layer(network* net, layer *l) {
         for (i=0; i<size; i++) {
             sum += *din++;
         }
-        *(out++) = sum/size;
+        *out++ = sum/size;
+//        *(out++) = c; // for sort and index
     }
 //    test_data("pool10.npy", net, l);
 }
@@ -294,36 +299,54 @@ void avg_layer(network* net, layer *l) {
                 float val = 0;
                 for (kh=0; kh<l->k; kh++) {
                     for (kw=0; kw<l->k; kw++) {
-                        val += din[c*(l->w*l->h) + l->w*(h+kh) + (w+kw)];
+                        val += input(l, din, l->s*w+kw, l->s*h+kh, c);
                     }
                 }
-                *(out++) = val/(l->k*l->k);
+                *out++ = val/(l->k*l->k);
             }
         }
     }
 }
 
-void soft_max(network* net, layer *l) {
+void softmax_layer(network* net, layer *l) {
+    float *in  =(float*)(net->data + l->din);
     float *out =(float*)(net->data + l->dout);
-    int index=0;
-    float val=0;
+    float sum=0;
     for (int i=0; i<net->classes; i++) {
-        if(*out>val) {
-            val = *out;
-            index = i;
-        }
-        out++;
+        *out = expf(*in++);
+        sum += *out++;
+        *out++ = i; // for sort and index
     }
-    printf("soft_max result [%d]: %f, %s\n", index, val, label[index]);
+    
+    out =(float*)(net->data + l->dout);
+    for (int i=0; i<net->classes; i++) {
+        *out++ = *out / sum;
+        *out++ = i; // for sort and index
+    }
+
+}
+
+int compar(const void* a, const void* b) {
+    return (*(float*)b - *(float*)a)*10000;
+}
+
+void prob(network* net, layer *l) {
+    float *out =(float*)(net->data + l->dout);
+    qsort(out, net->classes, 8, compar);
+    for (int i=0; i<5; ++i) {
+        float val = out[i*2];
+        int index = out[i*2+1];
+        printf("classify result [%d]: %f, %s\n", index, val, label[index]);
+    }
 }
 
 void network_forword(network* net){
     int i;
     net->dw = net->data;
     for (i=0; i<net->llen; i++) {
-        printf("%d: %s", i, net->layers[i].name);
+//        printf("%d: %s", i, net->layers[i].name);
         net->layers[i].forword(net, net->layers+i);
-        printf("\n");
+//        printf("\n");
 //        if(i==10){ // ok
 //            test_data("pool3.npy", net, net->layers+i);
 //            break;
@@ -350,7 +373,7 @@ void network_forword(network* net){
 //        }
 
     }
-    soft_max(net, net->layers + net->llen-1);
+    prob(net, net->layers + net->llen-1);
     return;
 }
 
@@ -411,7 +434,8 @@ void build_SqueezeNet_v11(network* net){
 
     // Final convolution
     layer *l=build_layer(net, L_CONV|L_RELU, net->classes, 1, 1, 0, 1);
-    build_layer(net, L_AVG, net->classes, l->wo, l->wo, 0, 1);
+    build_layer(net, L_AVG, net->classes, l->wo, l->ho, 0, 1);
+    build_layer(net, L_SOFT, net->classes, 1, 1, 0, 1);
 }
 
 /* SqueezeNet v1.0 */
@@ -430,7 +454,7 @@ void load_weight(network* net, const char* path){
     // printf("%d,%d\n", net->weight, weight);
 }
 
-void load_image_(network* net, const char* path){
+void load_image(network* net, const char* path){
     int w, h, c;
     uint8_t *img = stbi_load(path, &w, &h, &c, 0);
     float *dat = net->data + net->weight;
@@ -456,43 +480,6 @@ void load_image_(network* net, const char* path){
     //             }
     //         }
     // }
-}
-
-void load_image(network* net, const char* path){
-    int w, h, c;
-    uint8_t *img = stbi_load(path, &w, &h, &c, 0);
-    uint8_t *img_ = img;
-    float *dat = net->data + net->weight;
-    float *tem = malloc(w*h*c*sizeof(float)), *tem_=tem;
-    for (int i = 0; i < h*w*c; ++i){
-        *tem_++ = *img_++;
-    }
-    stbi_image_free(img);
-    // resize
-    float *temp = malloc(net->input_w * net->input_h * net->input_c * sizeof(float));
-    stbir_resize_float(tem, w, h, 0, temp, net->input_w, net->input_h, 0, net->input_c);
-
-    // stbi_write_bmp("cat_227.bmp", net->input_w, net->input_h, 3, temp); // test
-    // convert to C * W * H, float
-    // mean-subtracted values:
-    float BGR[] = {104.00698793, 116.66876762, 122.67891434};
-    for (c=0; c<net->input_c; c++) {
-        for (h=0; h<net->input_h; h++) {
-            for (w=0; w<net->input_w; w++) {
-                *dat++ = temp[net->input_w*3*h + w*3 + (2-c)] - BGR[c];
-            }
-        }
-    }
-    // dat = net->data + net->weight;
-    // for (c=0; c<net->input_c; c++) {
-    //     for (h=0; h<net->input_h; h++) {
-    //         for (w=0; w<net->input_w; w++) {
-    //                printf("%f, ", *dat++);
-    //             }
-    //         }
-    // }
-    free(tem);
-    free(temp);
 }
 
 void load_img_npy(network* net, const char* path){
@@ -532,10 +519,12 @@ int main(int argc, const char * argv[]) {
 
     load_weight(&net_v11, argv[1]);
     load_label(&net_v11, argv[2]);
-    load_image_(&net_v11, argv[3]); // raw image, [c * w * h]
-    // load_img_npy(&net_v11, argv[3]);
+    load_image(&net_v11, argv[3]); // raw image, [c * w * h]
+//     load_img_npy(&net_v11, argv[3]);
     build_SqueezeNet_v11(&net_v11);
+#ifdef DEBUG
     print_wetwork(&net_v11);
+#endif
     network_forword(&net_v11);
     
     printf("\n");
