@@ -14,6 +14,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
+#define STBIR_DEFAULT_FILTER_DOWNSAMPLE  STBIR_FILTER_CATMULLROM
 #include "stb_image_resize.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
@@ -243,8 +244,6 @@ void conv_layer(network* net, layer *l) {
             }
         }
     }
-//    if(strcmp("fire27", l->name)==0) // ok
-//        test_weight("conv17.npy", net, l);
     net->dw += l->weight + l->co; // weight point ++
 }
 
@@ -371,7 +370,6 @@ void network_forword(network* net){
 //            test_data("fire7_expand3x3.npy", net, net->layers+i);
 //            break;
 //        }
-
     }
     prob(net, net->layers + net->llen-1);
     return;
@@ -451,7 +449,6 @@ void load_weight(network* net, const char* path){
     fread(net->data, 1, weight, f);
     fclose(f);
     net->weight = (int32_t)weight>>2;
-    // printf("%d,%d\n", net->weight, weight);
 }
 
 void load_image(network* net, const char* path){
