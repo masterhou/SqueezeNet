@@ -64,8 +64,6 @@ typedef struct layer{
     char name[16];
 } layer;
 
-
-
 #ifdef NNPACK
 void conv_nnp(network* net, layer *l);
 void max_nnp (network* net, layer *l);
@@ -96,6 +94,9 @@ typedef struct network {
     // bias lenght: [cout]
     float data[1024*1024*5]; // in DRAM
     float *dw;
+#ifdef NNPACK
+    pthreadpool_t threadpool;
+#endif
 }network;
 
 void print_layer(layer *l) {
@@ -249,7 +250,7 @@ void conv_nnp(network* net, layer *l) {
                               nnp_convolution_transform_strategy_tuple_based,
                               l->c, l->co, in_size, pad_size, kr_size, st_size,
                               din, wei, bias, out,
-                              NULL, NULL, relu, NULL, NULL, NULL);
+                              NULL, NULL, relu, NULL, net->threadpool, NULL);
     
     if(status) printf("\n%s conv_nnp status:%d\n", l->name, status);
     net->dw += l->weight + l->co; // weight point ++
@@ -261,14 +262,14 @@ void max_nnp(network* net, layer *l) {
     struct nnp_size st_size = {l->s, l->s};
     struct nnp_size kr_size = {l->k, l->k};
     struct nnp_padding pad_size = {l->pad,l->pad,l->pad,l->pad};
-    int status =  nnp_max_pooling_output(1, l->c, in_size, pad_size, kr_size, st_size, din, out, NULL);
+    int status =  nnp_max_pooling_output(1, l->c, in_size, pad_size, kr_size, st_size, din, out, net->threadpool);
     if(status) printf("\n%s max_nnp status:%d\n", l->name, status);
 }
 
 void softmax_nnp(network* net, layer *l) {
     float *in  =(float*)(net->data + l->din);
     float *out =(float*)(net->data + l->dout);
-    int status =  nnp_softmax_output(1, l->c, in, out, NULL);
+    int status =  nnp_softmax_output(1, l->c, in, out, net->threadpool);
     if(status) printf("\n%s softmax_nnp status:%d\n", l->name, status);
     
     in = out + net->classes - 1;
@@ -580,6 +581,9 @@ network net_v11;
 int main(int argc, const char * argv[]) {
 #ifdef NNPACK
     nnp_initialize();
+    net_v11.threadpool = pthreadpool_create(0);
+    const size_t threads_count = pthreadpool_get_threads_count(net_v11.threadpool);
+    printf("Created thread pool with %zu threads\n", threads_count);
 #endif
     net_v11.llen = 0;
     net_v11.classes = 1000;
