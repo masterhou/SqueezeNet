@@ -8,8 +8,10 @@
 
 #include <stdio.h>
 #include <float.h>
-
-//#include <Accelerate/Accelerate.h>
+#define NNPACK
+#ifdef NNPACK
+#include <nnpack.h>
+#endif
 
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -67,6 +69,9 @@ void max_layer (network* net, layer *l);
 void gavg_layer (network* net, layer *l);
 void cat_layer(network* net, layer *l);
 void softmax_layer(network* net, layer *l);
+
+void conv_nnp(network* net, layer *l);
+
 
 #define LAY_MAX     0x40
 typedef struct network {
@@ -169,7 +174,11 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
         l->ho = (l->h + 2 * pad - k) / s + 1;
         l->wo = (l->w + 2 * pad - k) / s + 1;
         l->weight = l->co * l->c * l->k * l->k;
+#ifdef NNPACK
+        l->forword = conv_nnp;
+#else
         l->forword = conv_layer;
+#endif
         sprintf(l->name, "conv%d", net->llen);
     }
     else if((type&L_MAX) == L_MAX){
@@ -208,6 +217,28 @@ float input(layer *l, float *d, uint16_t w, uint16_t h, uint16_t c){
     
     return d[c*(l->w*l->h) + l->w*h + w];
 }
+#ifdef NNPACK
+void conv_nnp(network* net, layer *l) {
+    uint8_t relu = ((l->type & L_RELU) == L_RELU);
+//    uint16_t c,co,w,h,kw,kh, tk=l->k*l->k;
+    float *din =(float*)(net->data + l->din);
+    float *out =(float*)(net->data + l->dout);
+    float *wei =(float*)(net->dw);
+    float *bias=(float*)(net->dw+l->weight);
+    struct nnp_size in_size = {l->w, l->h};
+    struct nnp_size st_size = {l->s, l->s};
+    struct nnp_size kr_size = {l->k, l->k};
+    struct nnp_padding pad_size = {l->pad,l->pad,l->pad,l->pad};
+    int status = nnp_convolution_inference(nnp_convolution_algorithm_auto,
+                              nnp_convolution_transform_strategy_tuple_based,
+                              l->c, l->co, in_size, pad_size, kr_size, st_size,
+                              din, wei, bias, out,
+                              NULL, NULL, relu, NULL, NULL, NULL);
+    
+    if(status) printf("\n%s nnp status:%d\n", l->name, status);
+    net->dw += l->weight + l->co; // weight point ++
+}
+#endif
 
 // 2d image convolution
 void conv_layer(network* net, layer *l) {
@@ -319,7 +350,8 @@ void softmax_layer(network* net, layer *l) {
     
     out =(float*)(net->data + l->dout);
     for (int i=0; i<net->classes; i++) {
-        *out++ = *out / sum;
+        *out = *out / sum;
+        out++;
         *out++ = i; // for sort and index
     }
 
@@ -346,6 +378,10 @@ void network_forword(network* net){
 //        printf("%d: %s", i, net->layers[i].name);
         net->layers[i].forword(net, net->layers+i);
 //        printf("\n");
+//        if(i==0){ // ok
+//            test_data("conv1.npy", net, net->layers+i);
+//            break;
+//        }
 //        if(i==10){ // ok
 //            test_data("pool3.npy", net, net->layers+i);
 //            break;
@@ -508,6 +544,9 @@ void load_label(network* net, const char* path){
 
 network net_v11;
 int main(int argc, const char * argv[]) {
+#ifdef NNPACK
+    nnp_initialize();
+#endif
     net_v11.llen = 0;
     net_v11.classes = 1000;
     net_v11.input_c = 3;
