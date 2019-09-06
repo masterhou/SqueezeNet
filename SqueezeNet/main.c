@@ -64,14 +64,22 @@ typedef struct layer{
     char name[16];
 } layer;
 
+
+
+#ifdef NNPACK
+void conv_nnp(network* net, layer *l);
+void max_nnp (network* net, layer *l);
+void gavg_nnp (network* net, layer *l);
+void cat_nnp(network* net, layer *l);
+void softmax_nnp(network* net, layer *l);
+#endif
+
 void conv_layer(network* net, layer *l);
 void max_layer (network* net, layer *l);
-void gavg_layer (network* net, layer *l);
-void cat_layer(network* net, layer *l);
 void softmax_layer(network* net, layer *l);
 
-void conv_nnp(network* net, layer *l);
-
+void gavg_layer (network* net, layer *l);
+void cat_layer(network* net, layer *l);
 
 #define LAY_MAX     0x40
 typedef struct network {
@@ -184,7 +192,11 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
     else if((type&L_MAX) == L_MAX){
         l->ho = ceil((l->h + 2.0 * pad - k) / s) + 1;
         l->wo = ceil((l->w + 2.0 * pad - k) / s) + 1;
+#ifdef NNPACK
+        l->forword = max_nnp;
+#else
         l->forword = max_layer;
+#endif
         sprintf(l->name, "max%d", net->llen);
     }
     else if((type&L_AVG) == L_AVG){
@@ -196,7 +208,11 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
      else if((type&L_SOFT) == L_SOFT) {
          l->ho = 1;
          l->wo = 1;
+#ifdef NNPACK
+         l->forword = softmax_nnp;
+#else
          l->forword = softmax_layer;
+#endif
          sprintf(l->name, "soft%d", net->llen);
      }
     
@@ -235,8 +251,35 @@ void conv_nnp(network* net, layer *l) {
                               din, wei, bias, out,
                               NULL, NULL, relu, NULL, NULL, NULL);
     
-    if(status) printf("\n%s nnp status:%d\n", l->name, status);
+    if(status) printf("\n%s conv_nnp status:%d\n", l->name, status);
     net->dw += l->weight + l->co; // weight point ++
+}
+void max_nnp(network* net, layer *l) {
+    float *din =(float*)(net->data + l->din);
+    float *out =(float*)(net->data + l->dout);
+    struct nnp_size in_size = {l->w, l->h};
+    struct nnp_size st_size = {l->s, l->s};
+    struct nnp_size kr_size = {l->k, l->k};
+    struct nnp_padding pad_size = {l->pad,l->pad,l->pad,l->pad};
+    int status =  nnp_max_pooling_output(1, l->c, in_size, pad_size, kr_size, st_size, din, out, NULL);
+    if(status) printf("\n%s max_nnp status:%d\n", l->name, status);
+}
+
+void softmax_nnp(network* net, layer *l) {
+    float *in  =(float*)(net->data + l->din);
+    float *out =(float*)(net->data + l->dout);
+    int status =  nnp_softmax_output(1, l->c, in, out, NULL);
+    if(status) printf("\n%s softmax_nnp status:%d\n", l->name, status);
+    
+    in = out + net->classes - 1;
+    out += net->classes*2 - 1;
+    for (int i=l->c-1; i>=0; i--) {
+        *out-- = i;
+        *out-- = *in--;
+    }
+}
+
+void gavg_nnp(network* net, layer *l) {
 }
 #endif
 
@@ -314,7 +357,6 @@ void gavg_layer(network* net, layer *l) {
             sum += *din++;
         }
         *out++ = sum/size;
-//        *(out++) = c; // for sort and index
     }
 //    test_data("pool10.npy", net, l);
 }
@@ -505,14 +547,6 @@ void load_image(network* net, const char* path){
             }
         }
     }
-    // dat = net->data + net->weight;
-    // for (c=0; c<net->input_c; c++) {
-    //     for (h=0; h<net->input_h; h++) {
-    //         for (w=0; w<net->input_w; w++) {
-    //                printf("%f, ", *dat++);
-    //             }
-    //         }
-    // }
 }
 
 void load_img_npy(network* net, const char* path){
@@ -556,7 +590,7 @@ int main(int argc, const char * argv[]) {
     load_weight(&net_v11, argv[1]);
     load_label(&net_v11, argv[2]);
     load_image(&net_v11, argv[3]); // raw image, [c * w * h]
-//     load_img_npy(&net_v11, argv[3]);
+//     load_img_npy(&net_v11, argv[3]); // test
     build_SqueezeNet_v11(&net_v11);
 #ifdef DEBUG
     print_wetwork(&net_v11);
