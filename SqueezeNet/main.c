@@ -8,7 +8,7 @@
 
 #include <stdio.h>
 #include <float.h>
-#define NNPACK
+//#define NNPACK
 #ifdef NNPACK
 #include <nnpack.h>
 #endif
@@ -30,14 +30,14 @@
 #define L_FIRE  32
 #define L_SOFT  64
 
-char label[1000][150];
+extern char *label[];
 
 // Image memery [W * H * C] need convert to Data formate
 // Data  [N * C * W * H]
 
 typedef struct layer layer;
 typedef struct network network;
-typedef void(*forword_func)(network* net, layer *l);
+typedef void(*forward_func)(network* net, layer *l);
 
 typedef struct layer{
     /* input */
@@ -60,7 +60,7 @@ typedef struct layer{
     /* weight length */
     uint32_t weight;
     layer* in;
-    forword_func forword; // funcation
+    forward_func forward; // funcation
     char name[16];
 } layer;
 
@@ -184,35 +184,35 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
         l->wo = (l->w + 2 * pad - k) / s + 1;
         l->weight = l->co * l->c * l->k * l->k;
 #ifdef NNPACK
-        l->forword = conv_nnp;
+        l->forward = conv_nnp;
 #else
-        l->forword = conv_layer;
+        l->forward = conv_layer;
 #endif
         sprintf(l->name, "conv%d", net->llen);
     }
     else if((type&L_MAX) == L_MAX){
-        l->ho = ceil((l->h + 2.0 * pad - k) / s) + 1;
-        l->wo = ceil((l->w + 2.0 * pad - k) / s) + 1;
+        l->ho = ceilf((l->h + 2.0 * pad - k) / s) + 1;
+        l->wo = ceilf((l->w + 2.0 * pad - k) / s) + 1;
 #ifdef NNPACK
-        l->forword = max_nnp;
+        l->forward = max_nnp;
 #else
-        l->forword = max_layer;
+        l->forward = max_layer;
 #endif
         sprintf(l->name, "max%d", net->llen);
     }
     else if((type&L_AVG) == L_AVG){
         l->ho = 1;
         l->wo = 1;
-        l->forword = gavg_layer;
+        l->forward = gavg_layer;
         sprintf(l->name, "gavg%d", net->llen);
     }
      else if((type&L_SOFT) == L_SOFT) {
          l->ho = 1;
          l->wo = 1;
 #ifdef NNPACK
-         l->forword = softmax_nnp;
+         l->forward = softmax_nnp;
 #else
-         l->forword = softmax_layer;
+         l->forward = softmax_layer;
 #endif
          sprintf(l->name, "soft%d", net->llen);
      }
@@ -305,8 +305,6 @@ void conv_layer(network* net, layer *l) {
                             val +=  p * weight;
                         }
                     }
-                    // use Accelerate
-                    // cblas_sgemm(
                 }
                 // ReLU
                 if(relu && val<=0.f){
@@ -328,16 +326,16 @@ void cat_layer(network* net, layer *l) {
 }
 
 void max_layer(network* net, layer *l) {
-    uint16_t c,w,h,kw,kh;
+    uint16_t co,w,h,kw,kh;
     float *din =(float*)(net->data + l->din);
     float *out =(float*)(net->data + l->dout);
-    for (c=0; c<l->c; c++) {
+    for (co=0; co<l->co; co++) {
         for (h=0; h<l->ho; h++) {
             for (w=0; w<l->wo; w++) { // stride
                 float val = FLT_MIN;
                 for (kh=0; kh<l->k; kh++) {
                     for (kw=0; kw<l->k; kw++) {
-                        float t = input(l, din, l->s*w+kw, l->s*h+kh, c);
+                        float t = input(l, din, l->s*w+kw, l->s*h+kh, co);
                         if(t>val)
                             val = t;
                     }
@@ -419,7 +417,7 @@ void network_forword(network* net){
     net->dw = net->data;
     for (i=0; i<net->llen; i++) {
 //        printf("%d: %s", i, net->layers[i].name);
-        net->layers[i].forword(net, net->layers+i);
+        net->layers[i].forward(net, net->layers+i);
 //        printf("\n");
 //        if(i==0){ // ok
 //            test_data("conv1.npy", net, net->layers+i);
@@ -466,7 +464,7 @@ layer* build_cat(network* net, uint32_t type, layer* l1, layer* l2){
     l->type = type;
     l->din = l1->din;
     l->dout = l1->dout;
-    l->forword = cat_layer;
+    l->forward = cat_layer;
     net->llen++;
     return l;
 }
@@ -528,6 +526,7 @@ void load_weight(network* net, const char* path){
     fread(net->data, 1, weight, f);
     fclose(f);
     net->weight = (int32_t)weight>>2;
+    net->dw = net->data;
 }
 
 void load_image(network* net, const char* path){
@@ -592,7 +591,7 @@ int main(int argc, const char * argv[]) {
     net_v11.input_h = 227;
 
     load_weight(&net_v11, argv[1]);
-    load_label(&net_v11, argv[2]);
+//    load_label(&net_v11, argv[2]);
     load_image(&net_v11, argv[3]); // raw image, [c * w * h]
 //     load_img_npy(&net_v11, argv[3]); // test
     build_SqueezeNet_v11(&net_v11);
