@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		207B5E69233C5A78007793E3 /* cat_sq.jpg in CopyFiles */ = {isa = PBXBuildFile; fileRef = 207B5E68233C5A1C007793E3 /* cat_sq.jpg */; };
 		207B5E6B233C6B6C007793E3 /* synset_words.c in Sources */ = {isa = PBXBuildFile; fileRef = 207B5E6A233C6B6C007793E3 /* synset_words.c */; };
+		20CC745B23541A520037F5EE /* hls_cnn.c in Sources */ = {isa = PBXBuildFile; fileRef = 20CC745923541A520037F5EE /* hls_cnn.c */; };
 		20DB3C1E2317B1B90082DD05 /* main.c in Sources */ = {isa = PBXBuildFile; fileRef = 20DB3C1D2317B1B90082DD05 /* main.c */; };
 		20DB3C28231D08C20082DD05 /* weight.bin in CopyFiles */ = {isa = PBXBuildFile; fileRef = 20DB3C27231D089B0082DD05 /* weight.bin */; };
 		20DB3C2A231D09090082DD05 /* cat.jpg in CopyFiles */ = {isa = PBXBuildFile; fileRef = 20DB3C29231D09010082DD05 /* cat.jpg */; };
@@ -35,6 +36,8 @@
 		2066F8A42322053400FAD53E /* build.sh */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = build.sh; sourceTree = "<group>"; };
 		207B5E68233C5A1C007793E3 /* cat_sq.jpg */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; path = cat_sq.jpg; sourceTree = "<group>"; };
 		207B5E6A233C6B6C007793E3 /* synset_words.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = synset_words.c; sourceTree = "<group>"; };
+		20CC745923541A520037F5EE /* hls_cnn.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = hls_cnn.c; sourceTree = "<group>"; };
+		20CC745A23541A520037F5EE /* hls_cnn.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = hls_cnn.h; sourceTree = "<group>"; };
 		20DB3C1A2317B1B90082DD05 /* SqueezeNet */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = SqueezeNet; sourceTree = BUILT_PRODUCTS_DIR; };
 		20DB3C1D2317B1B90082DD05 /* main.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = main.c; sourceTree = "<group>"; };
 		20DB3C24231900DA0082DD05 /* stb_image_resize.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = stb_image_resize.h; sourceTree = "<group>"; };
@@ -85,6 +88,8 @@
 				20DB3C2B231D0CC80082DD05 /* synset_words.txt */,
 				20DB3C29231D09010082DD05 /* cat.jpg */,
 				2066F8A42322053400FAD53E /* build.sh */,
+				20CC745923541A520037F5EE /* hls_cnn.c */,
+				20CC745A23541A520037F5EE /* hls_cnn.h */,
 			);
 			path = SqueezeNet;
 			sourceTree = "<group>";
@@ -147,6 +152,7 @@
 			files = (
 				20DB3C1E2317B1B90082DD05 /* main.c in Sources */,
 				207B5E6B233C6B6C007793E3 /* synset_words.c in Sources */,
+				20CC745B23541A520037F5EE /* hls_cnn.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

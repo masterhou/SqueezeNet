@@ -13,6 +13,8 @@
 #include <nnpack.h>
 #endif
 
+#include "hls_cnn.h"
+
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
@@ -72,6 +74,8 @@ void cat_nnp(network* net, layer *l);
 void softmax_nnp(network* net, layer *l);
 #endif
 
+void conv_hls(network* net, layer *l);
+
 void conv_layer(network* net, layer *l);
 void max_layer (network* net, layer *l);
 void softmax_layer(network* net, layer *l);
@@ -114,48 +118,6 @@ void print_wetwork(network* net) {
     }
 }
 
-float * test_load(char* npy, long s) {
-    FILE   *f;
-    f = fopen(npy, "rb");
-    fseek(f, 128, SEEK_SET);
-    float *dat = malloc(sizeof(float)*s);
-    long ll = fread(dat, sizeof(float), s, f);
-    assert(ll==s);
-    fclose(f);
-    return dat;
-}
-
-void test_data(char* npy, network* net, layer *l) {
-    long s = l->co*(l->ho)*(l->wo);
-    float *dat = test_load(npy, s), *dd = dat;
-    float *out =(float*)(net->data + l->dout);
-    int diff = 0;
-    for (int i=0; i<s; i++) {
-        if(fabsf(((*out) - (*dd))/(*out))>0.000001)
-        {
-            printf("%d: %f, %f\n", i, *out++, *dd++);
-            diff = 1;
-        }
-    }
-    free(dat);
-    printf("test out %s(%ld) %s\n", l->name, s, diff? "failed" : "ok");
-}
-void test_weight(char* npy, network* net, layer *l) {
-    long s = l->co*l->c*(l->k)*(l->k);
-    float *dat = test_load(npy, s), *dd = dat;
-    float *wei =(float*)(net->dw);
-    int diff = 0;
-    for (int i=0; i<s; i++) {
-        if(fabsf(((*wei) - (*dd))/(*wei))>0.000001)
-        {
-            printf("%d: %f, %f\n", i, *wei++, *dd++);
-            diff = 1;
-        }
-    }
-    free(dat);
-    printf("test weight %s(%ld) %s\n\n", l->name, s, diff? "failed" : "ok");
-}
-
 layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t s, uint8_t pad, uint8_t in){
     layer *l = net->layers + net->llen;
     l->type = type;
@@ -186,7 +148,7 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
 #ifdef NNPACK
         l->forward = conv_nnp;
 #else
-        l->forward = conv_layer;
+        l->forward = conv_hls;//conv_layer;
 #endif
         sprintf(l->name, "conv%d", net->llen);
     }
@@ -203,7 +165,7 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
     else if((type&L_AVG) == L_AVG){
         l->ho = 1;
         l->wo = 1;
-        l->forward = gavg_layer;
+        l->forward = conv_hls;//gavg_layer;
         sprintf(l->name, "gavg%d", net->llen);
     }
      else if((type&L_SOFT) == L_SOFT) {
@@ -234,6 +196,27 @@ float input(layer *l, float *d, uint16_t w, uint16_t h, uint16_t c){
     
     return d[c*(l->w*l->h) + l->w*h + w];
 }
+void conv_hls(network* net, layer *l) {
+    volatile float *din =(float*)(net->data + l->din);
+    volatile float *out =(float*)(net->data + l->dout);
+    volatile float *wei =(float*)(net->dw);
+    volatile float *bias=(float*)(net->dw+l->weight);
+    u8 type = k1s1p0;
+    if(l->k==3 && l->s==2)
+        type = k3s2p0;
+    else if(l->k==3 && l->s==1)
+        type = k3s1p1;
+    else if(l->type == L_AVG)
+        type = avg;
+    add(wei, din, bias, out, l->c, l->co, l->w, l->wo, l->k, l->s, l->pad, type);
+//    if (type == k3s2p0 || type == k3s1p1 || type == k1s1p0) {
+//        add(wei, din, bias, out, l->c, l->co, l->w, l->wo, l->k, l->s, l->pad, type);
+//    }
+//    else
+//        convolution(wei, din, bias, out, l->c, l->co, l->w, l->wo, l->k, l->s, l->pad);
+    net->dw += l->weight + l->co; // weight point ++
+}
+
 #ifdef NNPACK
 void conv_nnp(network* net, layer *l) {
     uint8_t relu = ((l->type & L_RELU) == L_RELU);
@@ -351,8 +334,8 @@ void gavg_layer(network* net, layer *l) {
     float *din =(float*)(net->data + l->din);
     float *out =(float*)(net->data + l->dout);
     for (c=0; c<l->c; c++) {
-        float sum = 0.f;
-        for (i=0; i<size; i++) {
+        float sum = *din++;
+        for (i=1; i<size; i++) {
             sum += *din++;
         }
         *out++ = sum/size;
@@ -416,37 +399,9 @@ void network_forword(network* net){
     int i;
     net->dw = net->data;
     for (i=0; i<net->llen; i++) {
-//        printf("%d: %s", i, net->layers[i].name);
+        printf("%d: %s", i, net->layers[i].name);
         net->layers[i].forward(net, net->layers+i);
-//        printf("\n");
-//        if(i==0){ // ok
-//            test_data("conv1.npy", net, net->layers+i);
-//            break;
-//        }
-//        if(i==10){ // ok
-//            test_data("pool3.npy", net, net->layers+i);
-//            break;
-//        }
-//        if(i==19){  // ok
-//            test_data("pool5.npy", net, net->layers+i);
-//            break;
-//        }
-//        if(i==23){  // fcat23 / fire6/concat ok
-//            test_data("fire6_concat.npy", net, net->layers+i);
-//            break;
-//        }
-//        if(i==24){  // fire27 ok
-//            test_data("fire7_squeeze1x1.npy", net, net->layers+i);
-//            break;
-//        }
-//        if(i==25){  // ok
-//            test_data("fire7_expand1x1.npy", net, net->layers+i);
-//            break;
-//        }
-//        if(i==26){  // ok
-//            test_data("fire7_expand3x3.npy", net, net->layers+i);
-//            break;
-//        }
+        printf("\n");
     }
     prob(net, net->layers + net->llen-1);
     return;

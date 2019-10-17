@@ -3,10 +3,10 @@
    version = "1.0">
    <ContextStates>
       <ContextState
-         contextName = "load_weight:main.c">
+         contextName = "build_layer:main.c">
          <PersistentStrings>
             <PersistentString
-               value = "((float*)(net-&gt;data))[0]">
+               value = "l-&gt;in">
             </PersistentString>
          </PersistentStrings>
       </ContextState>
@@ -17,18 +17,40 @@
          contextName = "build_cat:main.c">
       </ContextState>
       <ContextState
-         contextName = "load_label:main.c">
+         contextName = "build_SqueezeNet_v11:main.c">
       </ContextState>
       <ContextState
-         contextName = "build_layer:main.c">
+         contextName = "input:main.c">
+      </ContextState>
+      <ContextState
+         contextName = "convolution:hls_cnn.c">
          <PersistentStrings>
             <PersistentString
-               value = "l-&gt;in">
+               value = "(*((uint32_t*)(&amp;acc)) &gt;&gt;31)">
             </PersistentString>
          </PersistentStrings>
       </ContextState>
       <ContextState
-         contextName = "build_SqueezeNet_v11:main.c">
+         contextName = "load_weight:main.c">
+         <PersistentStrings>
+            <PersistentString
+               value = "((float*)(net-&gt;data))[0]">
+            </PersistentString>
+         </PersistentStrings>
+      </ContextState>
+      <ContextState
+         contextName = "max_layer:main.c">
+      </ContextState>
+      <ContextState
+         contextName = "conv_layer:main.c">
+         <PersistentStrings>
+            <PersistentString
+               value = "(float*)(net-&gt;data + l-&gt;dout) - out">
+            </PersistentString>
+         </PersistentStrings>
+      </ContextState>
+      <ContextState
+         contextName = "load_label:main.c">
       </ContextState>
    </ContextStates>
 </VariablesViewState>
