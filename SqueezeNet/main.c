@@ -158,7 +158,7 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
 #ifdef NNPACK
         l->forward = max_nnp;
 #else
-        l->forward = max_layer;
+        l->forward = conv_hls;//max_layer;
 #endif
         sprintf(l->name, "max%d", net->llen);
     }
@@ -202,19 +202,22 @@ void conv_hls(network* net, layer *l) {
     volatile float *wei =(float*)(net->dw);
     volatile float *bias=(float*)(net->dw+l->weight);
     u8 type = k1s1p0;
-    if(l->k==3 && l->s==2)
+    if(l->type == L_AVG)
+        type = avg;
+    else if(l->type == L_MAX)
+        type = max_k3;
+    else if(l->k==3 && l->s==2)
         type = k3s2p0;
     else if(l->k==3 && l->s==1)
         type = k3s1p1;
-    else if(l->type == L_AVG)
-        type = avg;
+    
     add(wei, din, bias, out, l->c, l->co, l->w, l->wo, l->k, l->s, l->pad, type);
 //    if (type == k3s2p0 || type == k3s1p1 || type == k1s1p0) {
 //        add(wei, din, bias, out, l->c, l->co, l->w, l->wo, l->k, l->s, l->pad, type);
 //    }
 //    else
 //        convolution(wei, din, bias, out, l->c, l->co, l->w, l->wo, l->k, l->s, l->pad);
-    net->dw += l->weight + l->co; // weight point ++
+    if(l->type != L_MAX) net->dw += l->weight + l->co; // weight point ++
 }
 
 #ifdef NNPACK
@@ -312,8 +315,9 @@ void max_layer(network* net, layer *l) {
     uint16_t co,w,h,kw,kh;
     float *din =(float*)(net->data + l->din);
     float *out =(float*)(net->data + l->dout);
-    for (co=0; co<l->co; co++) {
-        for (h=0; h<l->ho; h++) {
+    for (h=0; h<l->ho; h++) {
+        for (co=0; co<l->co; co++) {
+            float *dout = out + co*l->wo*l->wo + l->wo*h;
             for (w=0; w<l->wo; w++) { // stride
                 float val = FLT_MIN;
                 for (kh=0; kh<l->k; kh++) {
@@ -323,7 +327,8 @@ void max_layer(network* net, layer *l) {
                             val = t;
                     }
                 }
-                *out++ = val;
+                *dout++ = val;
+                //out[co*l->wo*l->wo + l->wo*h + w] = val;
             }
         }
     }
@@ -550,9 +555,9 @@ int main(int argc, const char * argv[]) {
     load_image(&net_v11, argv[3]); // raw image, [c * w * h]
 //     load_img_npy(&net_v11, argv[3]); // test
     build_SqueezeNet_v11(&net_v11);
-#ifdef DEBUG
+// #ifdef DEBUG
     print_wetwork(&net_v11);
-#endif
+// #endif
     network_forword(&net_v11);
     
     printf("\n");

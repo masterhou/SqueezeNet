@@ -30,18 +30,22 @@ typedef unsigned short uint16_t;
 typedef unsigned int uint32_t;
 typedef uint8_t u2;
 typedef uint8_t u4;
+typedef uint8_t u6;
 typedef uint8_t u8;
 typedef uint16_t u10;
 typedef uint16_t u12;
 typedef uint16_t u13;
 typedef uint16_t u16;
+typedef uint32_t u18;
 typedef uint32_t u19;
+typedef uint32_t u20;
 typedef char s8;
 #endif
 
 #define k3s2p0      1
 #define k1s1p0      2
 #define k3s1p1      4
+#define max_k3       8
 #define avg         16
 #define S_Float(f) (*((int*)(&f)) >>31)
 
