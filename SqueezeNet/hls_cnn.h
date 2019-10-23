@@ -39,6 +39,8 @@ typedef uint16_t u16;
 typedef uint32_t u18;
 typedef uint32_t u19;
 typedef uint32_t u20;
+typedef uint32_t u32;
+typedef unsigned long u64;
 typedef char s8;
 #endif
 
@@ -55,3 +57,6 @@ void add(volatile float *weight, volatile float *img, volatile float *bias, vola
 void convolution(volatile float *weight, volatile float *img, volatile float *bias, volatile float *dout,
                  u10 ch, u10 co, u8 ww, u8 wo, u2 k, u2 s, u2 p);
 
+
+void u64_mul(u64 *weight, u64 *img, u64 *bias, u64 *dout,
+             u10 ch, u10 co, u8 ww, u8 wo) ;

@@ -15,7 +15,6 @@ typedef struct df
 }df;
 
 
-float acc_t[128];
 float wei[64*3*3];
 float bb[1000];
 float im[113*64*3]; // stride + 2*padding = 3
@@ -29,7 +28,7 @@ u10 ch, u10 co, u6 ww, u6 wo) {
 #pragma HLS ARRAY_PARTITION variable=acc_t cyclic factor=2
 #pragma HLS INLINE
     u2 m, n;
-    u8 x, y, j, mm;
+    u8 x, y, j;
     u10 i;
     u12 yj;
     s8 xx, yy;
@@ -49,39 +48,33 @@ u10 ch, u10 co, u6 ww, u6 wo) {
         conv_k3s1p1:
         for(i=0, wl=0, dl=0; i < co; i++, wl+=wei_len, dl+=w2){
             memcpy(wei, (const void*)(weight+wl), wei_len*sizeof(float));
-            //weight += wei_len;
             float bbi = bb[i];
             volatile float *out= dout+dl;
             k3s1p1_x:
             for(x=0; x<wo; x++){
                 u16 wi = 0;
+                float acc = bbi;
+                float *pm = im;
                 k3s1p1_ch:
                 for(j=0, yj=0; j < ch; j++, yj+=wx3){
 #pragma HLS UNROLL skip_exit_check factor=2
 #pragma HLS PIPELINE II=1
                     u4 _i=0;
                     k3s1p1_kernel_y1:
-                    for(m=0,mm=0,yy=y-1; m<3; m++,mm+=ww,yy++){
+                    for(m=0, yy=y-1; m<3; m++, yy++, pm+=ww){
                         k3s1p1_kernel_x1:
                         for(n=0, xx=x-1; n<3; n++, xx++, wi++){
                             if(xx>=0 && xx<ww && yy>=0 && yy<ww){
-                                buf[_i++] = wei[wi] * im[yj + mm + xx];
+                                buf[_i++] = wei[wi] * pm[xx];
                             }
                             else {
                                 buf[_i++] = 0.f;
                             }
                         }
                     }
-                    acc_t[j] = buf[0] + buf[1] + buf[2] + buf[3] + buf[4] + buf[5] + buf[6] + buf[7] + buf[8];
+                    acc += buf[0] + buf[1] + buf[2] + buf[3] + buf[4] + buf[5] + buf[6] + buf[7] + buf[8];
                 }
-                float acc = bbi;
-                acc_add:
-                for(j=0; j < ch; j++) {
-#pragma HLS PIPELINE II=2
-#pragma HLS UNROLL skip_exit_check factor=8
-                    acc += acc_t[j];
-                }
-                *out++ = S_Float(acc) ? 0.0f : acc;
+                out[x] = S_Float(acc) ? 0.0f : acc;
             }
         }
     }
@@ -94,37 +87,34 @@ u10 ch, u10 co, u8 ww, u8 wo){
 #pragma HLS ARRAY_PARTITION variable=im cyclic factor=2
 #pragma HLS INLINE
     u2 m, n, j; // max = 3
-    u8 x, y, xx, i;
-    u10 mm;
+    u8 x, y, i;
     u12 yj;
-    u16 y2;
     u19 yw;
 
-
     k3s2p0_yo:
-    for(y=0, y2=0; y<113; y++, y2+=227*2){
+    for(y=0; y<113; y++, img+=227*2, dout+=113){
         k3s2p0_img_cpy:
         for(j=0, yj=0, yw=0; j < 3; j++, yj+=227*3, yw+=227*227){
-            memcpy(im+yj, (void*)(img+yw+y2), 227*3*sizeof(float)); // k=3;s=2
+            memcpy(im+yj, (void*)(img+yw), 227*3*sizeof(float)); // k=3;s=2
         }
         k3s2p0_co:
         for(i=0; i < 64; i++){
             float bbi = bb[i];
-            volatile float *out= dout+113*113*i+113*y;
+            volatile float *out= dout+113*113*i;
             memcpy(wei, (const void*)(weight+27*i), 27*sizeof(float));
-            // weight += 27;
             k3s2p0_xo:
             for(x=0; x<113; x++){
 #pragma HLS PIPELINE II=2
                 u8 wi = 0;
+                float *pm = im + (x<<1);
                 float acc = bbi;
                 k3s2p0_ch:
-                for(j=0, yj=0; j < 3; j++, yj+=227*3){
+                for(j=0; j < 3; j++){
                     k3s2p0_y2:
-                    for(m=0, mm=0; m<3; m++, mm+=227){
+                    for(m=0; m<3; m++, pm+=227){
                         k3s2p0_x2:
-                        for(n=0, xx=(x<<1); n<3; n++, xx++){
-                            acc += wei[wi++] * im[yj + mm + xx];
+                        for(n=0; n<3; n++){
+                            acc += wei[wi++] * pm[n];
                         }
                     }
                 }
@@ -310,3 +300,38 @@ void convolution(volatile float *weight, volatile float *img, volatile float *bi
 */
 
 
+typedef union f_i {
+    float f;
+    uint32_t i;
+}f_i;
+
+void u64_mul(u64 *weight, u64 *img, u64 *bias, u64 *dout,
+        u10 ch, u10 co, u8 ww, u8 wo) {
+#pragma HLS INTERFACE m_axi depth=1024 port=weight offset=slave
+#pragma HLS INTERFACE m_axi depth=1024 port=img offset=slave
+#pragma HLS INTERFACE m_axi depth=1024 port=bias offset=slave
+#pragma HLS INTERFACE m_axi depth=1024 port=dout offset=slave
+
+    for(u10 i=0; i<100; i++) {
+#pragma HLS PIPELINE II=1
+        f_i a, b;
+        a.i = (bias[i]<<32)>>32;// (u32)(bias[i]&0xFFFFFFFFL); //bias[i].range(31, 0);
+        b.i = bias[i]>>32; //bias[i].range(63,32);
+        bb[i*2  ]=a.f;
+        bb[i*2+1]=b.f;
+    }
+
+    for(u10 i=0; i<50; i++) {
+#pragma HLS PIPELINE II=1
+        f_i a, b;
+        a.f = bb[i*4+0]* bb[i*4+1];
+        b.f = bb[i*4+2]* bb[i*4+3];
+        //u64 res = a;
+        //res.range(31,  0) = a;
+        //res.range(63, 32) = b;
+        dout[i] = (((u64)b.i)<<32 | a.i); //res;
+    }
+
+
+    //conv_k3s1p1(weight, img, bias, dout, ch, co, ww, wo);
+}

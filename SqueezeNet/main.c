@@ -142,13 +142,13 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
     l->dout = l->din + (l->w * l->h * l->c);
     
     if((type&L_CONV) == L_CONV){
-        l->ho = (l->h + 2 * pad - k) / s + 1;
-        l->wo = (l->w + 2 * pad - k) / s + 1;
+        l->ho = ((l->h + 2.0 * pad - k) / s) + 1;
+        l->wo = ((l->w + 2.0 * pad - k) / s) + 1;
         l->weight = l->co * l->c * l->k * l->k;
 #ifdef NNPACK
         l->forward = conv_nnp;
 #else
-        l->forward = conv_hls;//conv_layer;
+        l->forward = conv_layer; //conv_hls;//conv_layer;
 #endif
         sprintf(l->name, "conv%d", net->llen);
     }
@@ -158,14 +158,14 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
 #ifdef NNPACK
         l->forward = max_nnp;
 #else
-        l->forward = conv_hls;//max_layer;
+        l->forward = max_layer; //conv_hls;//max_layer;
 #endif
         sprintf(l->name, "max%d", net->llen);
     }
     else if((type&L_AVG) == L_AVG){
         l->ho = 1;
         l->wo = 1;
-        l->forward = conv_hls;//gavg_layer;
+        l->forward = gavg_layer; //conv_hls;//gavg_layer;
         sprintf(l->name, "gavg%d", net->llen);
     }
      else if((type&L_SOFT) == L_SOFT) {
@@ -558,7 +558,23 @@ int main(int argc, const char * argv[]) {
 // #ifdef DEBUG
     print_wetwork(&net_v11);
 // #endif
-    network_forword(&net_v11);
+//    network_forword(&net_v11);
+    
+    float bias[200];
+    float dout[100];
+    float dout1[100];
+    for (int i=0; i<100; i++) {
+        bias[i*2+0] = i*0.1;
+        bias[i*2+1] = i*0.2;
+        dout[i] = 0.0f;
+        dout1[i] = bias[i*2+0] * bias[i*2+1];
+    }
+    
+    u64_mul(0, 0, (u64*)bias, (u64*)dout, 0, 0, 0, 0);
+    
+    for (int i=0; i<100; i++) {
+        printf("%d, %f, %f\n", dout[i] == dout1[i], dout[i], dout1[i]);
+    }
     
     printf("\n");
     return 0;
