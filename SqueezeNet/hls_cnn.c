@@ -15,73 +15,98 @@ typedef struct df
 }df;
 
 
+void copy(float *buf0, float *buf1, float *in, u10 size) {
+#pragma HLS INLINE
+    double_copy:
+    for(u10 a=0; a<(size); a++) {
+#pragma HLS LOOP_TRIPCOUNT min=140 max=140
+#pragma HLS PIPELINE II=1
+        *buf0++ = in[a];
+        *buf1++ = in[a];
+    }
+}
+
 float wei[64*3*3];
 float bb[1000];
-float im[113*64*3]; // stride + 2*padding = 3
-static u10 wei_len, wx3;
+float im[227*3*3];
+static u10 wx3;
 static u16 w2;
 
-void conv_k3s1p1(volatile float *weight, volatile float *img, volatile float *bias, volatile float *dout,
-u10 ch, u10 co, u6 ww, u6 wo) {
+void conv_k3s1p1(float *weight, float *img, float *bias, float *dout,
+u7 ch, u9 co, u6 ww, u6 wo) {
 #pragma HLS ARRAY_PARTITION variable=wei cyclic factor=2
 #pragma HLS ARRAY_PARTITION variable=im cyclic factor=2
-#pragma HLS ARRAY_PARTITION variable=acc_t cyclic factor=2
 #pragma HLS INLINE
     u2 m, n;
-    u8 x, y, j;
-    u10 i;
+    u6 x, y;
+    u7 j;
+    u9 i;
     u12 yj;
-    s8 xx, yy;
+    s7 xx, yy;
     u16 yw;
     u18 wl, dl;
-    float buf[9];
-#pragma HLS ARRAY_PARTITION variable=buf complete dim=1
+    float im2[56*16*3], im3[56*16*3];
+    
+    float buf0[9];
+#pragma HLS ARRAY_PARTITION variable=buf0 complete dim=1
+    float buf1[9];
+#pragma HLS ARRAY_PARTITION variable=buf1 complete dim=1
 
-    wei_len = ch*9;
+    u10 wei_len = ch*9;
 
-    volatile float *imp = img-ww; // for padding=1
+    float *imp = img-ww; // for padding=1
     k3s1p1_y:
-    for(y=0; y<wo; y++, imp+=ww, dout+=ww){
+    for(y=0; y<ww; y++, imp+=ww, dout+=wo) {
+#pragma HLS LOOP_TRIPCOUNT min=56 max=56 avg=56
         for(j=0, yj=0, yw=0; j < ch; j++, yj+=wx3, yw+=w2){
-            memcpy(im+yj, (void*)(imp+yw), wx3*sizeof(float)); // k=3;s=1
+#pragma HLS LOOP_TRIPCOUNT min=16 max=16 avg=16
+            //memcpy(im+yj, (void*)(imp+yw), wx3*sizeof(float)); // k=3;s=1
+            copy(im2+yj, im3+yj, (imp+yw), wx3);
         }
         conv_k3s1p1:
-        for(i=0, wl=0, dl=0; i < co; i++, wl+=wei_len, dl+=w2){
+        for(i=0, wl=0, dl=0; i < co; i++, wl+=wei_len, dl+=wo*wo){
+#pragma HLS LOOP_TRIPCOUNT min=64 max=64 avg=64
             memcpy(wei, (const void*)(weight+wl), wei_len*sizeof(float));
             float bbi = bb[i];
-            volatile float *out= dout+dl;
+            float *out= dout+dl;
             k3s1p1_x:
-            for(x=0; x<wo; x++){
-                u16 wi = 0;
-                float acc = bbi;
-                float *pm = im;
+            for(x=0; x<ww; x+=2){
+#pragma HLS LOOP_TRIPCOUNT min=56/2 max=56/2
+                u10 wi = 0;
+                float acc0 = bbi, acc1 = bbi;
                 k3s1p1_ch:
-                for(j=0, yj=0; j < ch; j++, yj+=wx3){
+                for(j=0, yj=0; j < ch; j++){
+#pragma HLS LOOP_TRIPCOUNT min=16 max=16
 #pragma HLS UNROLL skip_exit_check factor=2
 #pragma HLS PIPELINE II=1
                     u4 _i=0;
                     k3s1p1_kernel_y1:
-                    for(m=0, yy=y-1; m<3; m++, yy++, pm+=ww){
+                    for(m=0, yy=y-1; m<3; m++, yy++, yj+=ww){
                         k3s1p1_kernel_x1:
-                        for(n=0, xx=x-1; n<3; n++, xx++, wi++){
-                            if(xx>=0 && xx<ww && yy>=0 && yy<ww){
-                                buf[_i++] = wei[wi] * pm[xx];
-                            }
-                            else {
-                                buf[_i++] = 0.f;
-                            }
+                        for(n=0, xx=x-1; n<3; n++, xx++, wi++, _i++){
+                            if(xx<0 || xx==ww || yy<0 || yy==ww)
+                                buf0[_i] = 0.f;
+                            else
+                                buf0[_i] = wei[wi] * im2[yj+xx];
+
+                            if(xx+1==ww || yy<0 || yy==ww)
+                                buf1[_i] = 0.f;
+                            else
+                                buf1[_i] = wei[wi] * im3[yj+xx+1];
                         }
                     }
-                    acc += buf[0] + buf[1] + buf[2] + buf[3] + buf[4] + buf[5] + buf[6] + buf[7] + buf[8];
+                    acc0 = acc0 + buf0[0] + buf0[1] + buf0[2] + buf0[3] + buf0[4] + buf0[5] + buf0[6] + buf0[7] + buf0[8];
+                    acc1 = acc1 + buf1[0] + buf1[1] + buf1[2] + buf1[3] + buf1[4] + buf1[5] + buf1[6] + buf1[7] + buf1[8];
                 }
-                out[x] = S_Float(acc) ? 0.0f : acc;
+                *out++ = S_Float(acc0) ? 0.0f : acc0;
+                *out++ = S_Float(acc1) ? 0.0f : acc1;
             }
         }
     }
 }
 
 
-void conv_k3s2p0(volatile float *weight, volatile float *img, volatile float *bias, volatile float *dout,
+void conv_k3s2p0(float *weight, float *img, float *bias, float *dout,
 u10 ch, u10 co, u8 ww, u8 wo){
 #pragma HLS ARRAY_PARTITION variable=wei cyclic factor=2
 #pragma HLS ARRAY_PARTITION variable=im cyclic factor=2
@@ -100,7 +125,7 @@ u10 ch, u10 co, u8 ww, u8 wo){
         k3s2p0_co:
         for(i=0; i < 64; i++){
             float bbi = bb[i];
-            volatile float *out= dout+113*113*i;
+            float *out= dout+113*113*i;
             memcpy(wei, (const void*)(weight+27*i), 27*sizeof(float));
             k3s2p0_xo:
             for(x=0; x<113; x++){
@@ -123,44 +148,46 @@ u10 ch, u10 co, u8 ww, u8 wo){
         }
     }
 }
-
-void conv_k1s1p0(volatile float *weight, volatile float *img, volatile float *bias, volatile float *dout,
+void conv_k1s1p0(float *weight, float *img, float *bias, float *dout,
 u10 ch, u10 co, u6 ww, u6 wo) {
 //#pragma HLS ARRAY_PARTITION variable=wei cyclic factor=2
 //#pragma HLS ARRAY_PARTITION variable=im cyclic factor=2
 #pragma HLS INLINE
-    u8 x, y;
+    u6 x, y;
     u10 i, j;
     u13 yj;
     u19 yw,wl;
+    float im0[56*128], im1[56*128];
 
     k1s1p0_y_out:
-    for(y=0; y<wo; y++, img+=ww, dout+=ww){
+    for(y=0; y<ww; y++, img+=ww, dout+=wo){
         for(j=0, yj=0, yw=0; j < ch; j++, yj+=ww, yw+=w2){
-            memcpy(im+yj, (void*)(img+yw), ww*sizeof(float));
+            //memcpy(im+yj, (void*)(img+yw), ww*sizeof(float));
+            copy(im0+yj, im1+yj, (img+yw), ww);
         }
         k1s1p0_co:
-        for(i=0, yw=0, wl=0; i < co; i++, yw+=w2, wl+=ch){
+        for(i=0, yw=0, wl=0; i < co; i++, yw+=wo*wo, wl+=ch){
             memcpy(wei, (const void*)(weight+wl), ch*sizeof(float));
-            // weight += ch;
             float bbi = bb[i];
-            volatile float *out= dout+yw;
+            float *out= dout+yw;
             k1s1p0_x_out:
-            for(x=0; x<wo; x++){
-                float acc = bbi;
+            for(x=0; x<ww; x+=2){
+                float acc0 = bbi, acc1 = bbi;
                 k1s1p0_k:
-                for(j=0, yj=x; j < ch; j++, yj+=ww){
+                for(j=0, yj=x; j < ch; j+=1, yj+=ww){
 #pragma HLS PIPELINE II=4
 #pragma HLS UNROLL skip_exit_check factor=16
-                    acc += wei[j] * im[yj];
+                    acc0 += wei[j] * im0[yj];
+                    acc1 += wei[j] * im1[yj+1];
                 }
-                *out++ = S_Float(acc) ? 0.0f : acc;
+                *out++ = S_Float(acc0) ? 0.0f : acc0;
+                *out++ = S_Float(acc1) ? 0.0f : acc1;
             }
         }
     }
 }
 
-void max_k3s2(volatile float *weight, volatile float *img, volatile float *bias, volatile float *dout,
+void max_k3s2(float *weight, float *img, float *bias, float *dout,
 u10 ch, u10 co, u8 ww, u6 wo) {
 #pragma HLS ARRAY_PARTITION variable=im cyclic factor=2
 #pragma HLS INLINE
@@ -177,8 +204,7 @@ u10 ch, u10 co, u8 ww, u6 wo) {
         for(i=0, yw=0, dw=0; i < co; i++, yw+=w2, dw+=wo*wo){
 #pragma HLS LOOP_TRIPCOUNT min=64 max=64 avg=64
             memcpy(im, (void*)(img+yw), wx3*sizeof(float)); // k=3;s=2
-
-            volatile float *out = dout + dw;
+            float *out = dout + dw;
             max_x:
             for (x=0; x<wo; x++) {
 #pragma HLS LOOP_TRIPCOUNT min=56 max=56 avg=56
@@ -186,11 +212,9 @@ u10 ch, u10 co, u8 ww, u6 wo) {
                 float val = 0.0f;
                 for (m=0, yy=(y<<1), mm=0; m<3; m++, yy++, mm+=ww) {
                     for (n=0, xx=(x<<1); n<3; n++, xx++) {
-                        if(xx<ww && yy<ww) {
-                            float t = im[ mm + xx];
-                            if(t>val)
-                                val = t;
-                        }
+                        float t = im[ mm + xx];
+                        if(t>val)
+                            val = t;
                     }
                 }
                 *out++ = val;
@@ -199,7 +223,7 @@ u10 ch, u10 co, u8 ww, u6 wo) {
     }
 }
 
-void avg_14_1000(volatile float *img, volatile float *dout){
+void avg_14_1000(float *img, float *dout){
     u10 j;
 #pragma HLS INLINE
     avg_chan:
@@ -212,8 +236,8 @@ void avg_14_1000(volatile float *img, volatile float *dout){
     }
 }
 
-void add(volatile float *weight, volatile float *img, volatile float *bias, volatile float *dout,
-    u10 ch, u10 co, u8 ww, u8 wo, u2 k, u2 s, u2 p, u8 type) {
+void add(float *weight, float *img, float *bias, float *dout,
+    u10 ch, u10 co, u8 ww, u8 wo, u2 type) {
 #pragma HLS INTERFACE m_axi depth=1024 port=weight offset=slave
 #pragma HLS INTERFACE m_axi depth=1024 port=img offset=slave
 #pragma HLS INTERFACE m_axi depth=1024 port=bias offset=slave
@@ -248,9 +272,10 @@ void add(volatile float *weight, volatile float *img, volatile float *bias, vola
     else if(type == avg) {
         avg_14_1000(img, dout);
     }
+    
 }
 /*
-void convolution(volatile float *weight, volatile float *img, volatile float *bias, volatile float *dout,
+void convolution(float *weight, float *img, float *bias, float *dout,
     u10 ch, u10 co, u8 ww, u8 wo, u2 k, u2 s, u2 p) {
 
     u10 i, j, jk, jww, ys, xs;

@@ -148,7 +148,7 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
 #ifdef NNPACK
         l->forward = conv_nnp;
 #else
-        l->forward = conv_layer; //conv_hls;//conv_layer;
+        l->forward = conv_hls;//conv_layer;
 #endif
         sprintf(l->name, "conv%d", net->llen);
     }
@@ -158,7 +158,7 @@ layer* build_layer(network* net, uint32_t type, uint16_t co, uint8_t k, uint8_t 
 #ifdef NNPACK
         l->forward = max_nnp;
 #else
-        l->forward = max_layer; //conv_hls;//max_layer;
+        l->forward = conv_hls;//max_layer;
 #endif
         sprintf(l->name, "max%d", net->llen);
     }
@@ -196,11 +196,25 @@ float input(layer *l, float *d, uint16_t w, uint16_t h, uint16_t c){
     
     return d[c*(l->w*l->h) + l->w*h + w];
 }
+
+void reshape(float *din, float *out, int ch, int ww) {
+
+    for (int i=0; i<ch; i++) {
+        out+=ww;
+        for (int y=1; y<ww-1; y++) {
+            out++;
+            for (int x=1; x<ww-1; x++) {
+                *out++ = *din++;
+            }
+            out++;
+        }
+    }
+}
 void conv_hls(network* net, layer *l) {
-    volatile float *din =(float*)(net->data + l->din);
-    volatile float *out =(float*)(net->data + l->dout);
-    volatile float *wei =(float*)(net->dw);
-    volatile float *bias=(float*)(net->dw+l->weight);
+    float *din =(float*)(net->data + l->din);
+    float *out =(float*)(net->data + l->dout);
+    float *wei =(float*)(net->dw);
+    float *bias=(float*)(net->dw+l->weight);
     u8 type = k1s1p0;
     if(l->type == L_AVG)
         type = avg;
@@ -208,15 +222,13 @@ void conv_hls(network* net, layer *l) {
         type = max_k3;
     else if(l->k==3 && l->s==2)
         type = k3s2p0;
-    else if(l->k==3 && l->s==1)
+    else if(l->k==3 && l->s==1) {
         type = k3s1p1;
-    
-    add(wei, din, bias, out, l->c, l->co, l->w, l->wo, l->k, l->s, l->pad, type);
-//    if (type == k3s2p0 || type == k3s1p1 || type == k1s1p0) {
-//        add(wei, din, bias, out, l->c, l->co, l->w, l->wo, l->k, l->s, l->pad, type);
-//    }
-//    else
-//        convolution(wei, din, bias, out, l->c, l->co, l->w, l->wo, l->k, l->s, l->pad);
+//        reshape(din, din+l->c*l->w*l->w , l->c, l->w);
+    }
+//    din = din+l->c*l->w*l->w;
+    add(wei, din, bias, out, l->c, l->co, l->w, l->wo, type);
+
     if(l->type != L_MAX) net->dw += l->weight + l->co; // weight point ++
 }
 
@@ -288,7 +300,7 @@ void conv_layer(network* net, layer *l) {
                         for (kw=0; kw<l->k; kw++) {
                             float weight = wei[co*l->c*tk + c*tk + l->k*kh + kw];
                             float p = input(l, din, l->s*w+kw, l->s*h+kh, c);
-                            val +=  p * weight;
+                            val = val + p * weight;
                         }
                     }
                 }
@@ -374,28 +386,31 @@ void softmax_layer(network* net, layer *l) {
     for (int i=0; i<net->classes; i++) {
         *out = expf(*in++);
         sum += *out++;
-        *out++ = i; // for sort and index
     }
     
     out =(float*)(net->data + l->dout);
     for (int i=0; i<net->classes; i++) {
         *out = *out / sum;
         out++;
-        *out++ = i; // for sort and index
     }
 
 }
-
+float *val = 0;
 int compar(const void* a, const void* b) {
-    return (*(float*)b - *(float*)a)*10000;
+    return (val[*((uint32_t*)a)] < val[*((uint32_t*)b)])*2-1;
 }
 
 void prob(network* net, layer *l) {
     float *out =(float*)(net->data + l->dout);
-    qsort(out, net->classes, 8, compar);
+    val = out;
+    uint32_t *idx = (uint32_t*)out + net->classes;
+    for (int i=0; i< net->classes; i++) {
+        idx[i] = i;
+    }
+    qsort(idx, net->classes, 4, compar);
     for (int i=0; i<5; ++i) {
-        float val = out[i*2];
-        int index = out[i*2+1];
+        int index = idx[i];
+        float val = out[index];
         printf("classify result [%d]: %f, %s\n", index, val, label[index]);
     }
 }
@@ -432,14 +447,23 @@ layer* build_cat(network* net, uint32_t type, layer* l1, layer* l2){
 void build_fire(network* net, uint16_t inplanes, uint16_t squeeze_planes, uint16_t expand1x1_planes, uint16_t expand3x3_planes){
     // squeeze
     static int i=2;
+    u2 ss=0;
+    if(i==3 || i==5)
+        ss=1;
+
     layer* l = build_layer(net, L_CONV|L_RELU, squeeze_planes, 1, 1, 0, 1);
     sprintf(l ->name, "f%d/s1", i);
     // squeeze -> expand1x1
     layer* l1 = build_layer(net, L_CONV|L_RELU, expand1x1_planes, 1, 1, 0, 1);
+    l1->dout += l->co * (l->wo+2) * (l->ho+2);
+    l1->ho += ss;
+    l1->wo += ss;
     sprintf(l1->name, "f%d/e1", i);
     // squeeze -> expand3x3
     layer* l3 = build_layer(net, L_CONV|L_RELU, expand3x3_planes, 3, 1, 1, 2);
     l3->dout = l1->dout + l1->co * (l1->wo) * (l1->ho);
+    l3->ho += ss;
+    l3->wo += ss;
     sprintf(l3->name, "f%d/e3", i);
     // concat: expand1x1 + expand3x3
     // *may use memery composition instead of concat layer: channel data + channel data
@@ -558,23 +582,24 @@ int main(int argc, const char * argv[]) {
 // #ifdef DEBUG
     print_wetwork(&net_v11);
 // #endif
-//    network_forword(&net_v11);
+    network_forword(&net_v11);
     
-    float bias[200];
-    float dout[100];
-    float dout1[100];
-    for (int i=0; i<100; i++) {
-        bias[i*2+0] = i*0.1;
-        bias[i*2+1] = i*0.2;
-        dout[i] = 0.0f;
-        dout1[i] = bias[i*2+0] * bias[i*2+1];
-    }
-    
-    u64_mul(0, 0, (u64*)bias, (u64*)dout, 0, 0, 0, 0);
-    
-    for (int i=0; i<100; i++) {
-        printf("%d, %f, %f\n", dout[i] == dout1[i], dout[i], dout1[i]);
-    }
+//    float bias[200];
+//    float dout[100];
+//    float dout1[100];
+//    for (int i=0; i<100; i++) {
+//        bias[i*2+0] = i*0.1;
+//        bias[i*2+1] = i*0.2;
+//        dout[i] = 0.0f;
+//        dout1[i] = bias[i*2+0] * bias[i*2+1];
+//    }
+//
+//    u64_mul(0, 0, (u64*)bias, (u64*)dout, 0, 0, 0, 0);
+//
+//    for (int i=0; i<100; i++) {
+//        printf("%d, %f, %f\n", dout[i] == dout1[i], dout[i], dout1[i]);
+//    }
+//
     
     printf("\n");
     return 0;

@@ -31,7 +31,9 @@ typedef unsigned int uint32_t;
 typedef uint8_t u2;
 typedef uint8_t u4;
 typedef uint8_t u6;
+typedef uint8_t u7;
 typedef uint8_t u8;
+typedef uint16_t u9;
 typedef uint16_t u10;
 typedef uint16_t u12;
 typedef uint16_t u13;
@@ -42,6 +44,7 @@ typedef uint32_t u20;
 typedef uint32_t u32;
 typedef unsigned long u64;
 typedef char s8;
+typedef char s7;
 #endif
 
 #define k3s2p0      1
@@ -51,10 +54,10 @@ typedef char s8;
 #define avg         16
 #define S_Float(f) (*((int*)(&f)) >>31)
 
-void add(volatile float *weight, volatile float *img, volatile float *bias, volatile float *dout,
-         u10 ch, u10 co, u8 ww, u8 wo, u2 k, u2 s, u2 p, u8 type);
+void add(float *weight, float *img, float *bias, float *dout,
+         u10 ch, u10 co, u8 ww, u8 wo, u2 type);
 
-void convolution(volatile float *weight, volatile float *img, volatile float *bias, volatile float *dout,
+void convolution(float *weight, float *img, float *bias, float *dout,
                  u10 ch, u10 co, u8 ww, u8 wo, u2 k, u2 s, u2 p);
 
 
